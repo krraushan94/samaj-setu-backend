@@ -1,9 +1,9 @@
 const { Pool } = require('pg');
 
-// SSL required for Render managed PostgreSQL
+// SSL required for Render managed PostgreSQL external connections
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false, require: true } : false,
 });
 
 pool.on('error', (err) => console.error('Unexpected PostgreSQL client error', err));
