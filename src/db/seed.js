@@ -81,46 +81,12 @@ async function seed() {
     console.log('✅ Seed v2 completed');
   } catch (err) {
     console.error('❌ Seed failed:', err.message);
-    process.exit(1);
+    if (require.main === module) process.exit(1);
+    throw err;
   } finally {
-    await pool.end();
+    if (require.main === module) await pool.end();
   }
 }
 
-seed();
-
-async function seed() {
-  try {
-    // Seed departments
-    for (const name of DEPARTMENTS) {
-      await pool.query(
-        'INSERT INTO departments (name) VALUES ($1) ON CONFLICT (name) DO NOTHING',
-        [name]
-      );
-    }
-    console.log('✅ Departments seeded');
-
-    // Verify admin password hash exists in env
-    const adminHash = process.env.ADMIN_PASSWORD_HASH;
-    if (!adminHash) {
-      // Generate a default password for first boot (must be changed)
-      const defaultHash = await bcrypt.hash('Admin@Samaj2026', 12);
-      console.log('\n⚠️  ADMIN_PASSWORD_HASH not set in .env');
-      console.log('   Default admin password: Admin@Samaj2026');
-      console.log('   Generated hash (add to .env):');
-      console.log(`   ADMIN_PASSWORD_HASH=${defaultHash}`);
-      console.log('   ⚠️  Change this password immediately after first login!\n');
-    } else {
-      console.log(`✅ Admin account ready — username: ${ADMIN_USERNAME}`);
-    }
-
-    console.log('✅ Seed completed');
-  } catch (err) {
-    console.error('❌ Seed failed:', err.message);
-    process.exit(1);
-  } finally {
-    await pool.end();
-  }
-}
-
-seed();
+if (require.main === module) seed();
+module.exports = seed;

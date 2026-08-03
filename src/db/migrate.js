@@ -185,10 +185,13 @@ async function migrate() {
     console.log('✅ Migrations applied successfully');
   } catch (err) {
     console.error('❌ Migration failed:', err.message);
-    process.exit(1);
+    if (require.main === module) process.exit(1);
+    throw err;
   } finally {
-    await pool.end();
+    // Only close pool when run directly, not when required as module
+    if (require.main === module) await pool.end();
   }
 }
 
-migrate();
+if (require.main === module) migrate();
+module.exports = migrate;

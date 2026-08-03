@@ -47,6 +47,20 @@ app.use('/api/users', userRoutes);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Samaj Setu API running on port ${PORT}`));
+
+// Run migrations then start server — avoids Render health-check timeout
+async function startServer() {
+  try {
+    if (process.env.NODE_ENV === 'production') {
+      await require('./db/migrate');
+      await require('./db/seed');
+    }
+  } catch (err) {
+    console.error('Migration/seed warning (continuing):', err.message);
+  }
+  app.listen(PORT, () => console.log(`Samaj Setu API running on port ${PORT}`));
+}
+
+startServer();
 
 module.exports = app;
