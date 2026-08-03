@@ -79,10 +79,12 @@ async function migrate() {
     console.log('✅ Migration v2 applied successfully');
   } catch (err) {
     console.error('❌ Migration v2 failed:', err.message);
-    process.exit(1);
+    if (require.main === module) process.exit(1);
+    throw err;
   } finally {
-    await pool.end();
+    if (require.main === module) await pool.end();
   }
 }
 
-migrate();
+if (require.main === module) migrate();
+module.exports = migrate;
