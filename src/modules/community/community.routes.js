@@ -3,6 +3,7 @@ const { verifyToken, requireAdmin } = require('../../middleware/auth');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { query } = require('../../config/db');
 const { randomUUID: uuidv4 } = require('crypto');
+const { NEVER_PUBLIC_GROUPS, NEVER_PUBLIC_SUBCATEGORY_LABELS } = require('../../config/constants');
 
 const router = Router();
 
@@ -10,8 +11,16 @@ const router = Router();
 router.get('/board', asyncHandler(async (req, res) => {
   const { page = 1, limit = 20, status, category, ward } = req.query;
   const offset = (page - 1) * limit;
-  const conditions = ["t.is_anonymous = FALSE OR t.is_anonymous IS NULL", "t.status != 'payment_pending'"];
-  const params = [];
+  const conditions = [
+    "(t.is_anonymous = FALSE OR t.is_anonymous IS NULL)",
+    "t.status != 'payment_pending'",
+    "t.is_hidden_from_board = FALSE",
+    // Women-safety and other personal-safety categories never appear publicly, regardless of
+    // the anonymity flag — this stays strictly citizen ↔ team ↔ admin.
+    `t.category NOT IN (${NEVER_PUBLIC_GROUPS.map((_, i) => `$${i + 1}`).join(',')})`,
+    `t.sub_category NOT IN (${NEVER_PUBLIC_SUBCATEGORY_LABELS.map((_, i) => `$${NEVER_PUBLIC_GROUPS.length + i + 1}`).join(',')})`,
+  ];
+  const params = [...NEVER_PUBLIC_GROUPS, ...NEVER_PUBLIC_SUBCATEGORY_LABELS];
 
   if (status) conditions.push(`t.status = $${params.push(status)}`);
   if (category) conditions.push(`t.category = $${params.push(category)}`);
@@ -31,6 +40,35 @@ router.get('/board', asyncHandler(async (req, res) => {
     params
   );
   res.json({ success: true, issues: result.rows });
+}));
+
+// Report a board post as false / defamatory / inappropriate (any signed-in citizen)
+router.post('/board/:ticketId/report', verifyToken, asyncHandler(async (req, res) => {
+  const { reason } = req.body;
+  await query(
+    'INSERT INTO post_reports (id, ticket_id, reporter_user_id, reason) VALUES ($1,$2,$3,$4)',
+    [uuidv4(), req.params.ticketId, req.user.id, reason || null]
+  );
+  res.status(201).json({ success: true, message: 'Thanks — our team will review this post.' });
+}));
+
+// Admin: list reported posts, and hide/unhide a post from the public board
+router.get('/board/reports', verifyToken, requireAdmin, asyncHandler(async (_req, res) => {
+  const result = await query(
+    `SELECT t.id AS ticket_id, t.ticket_number, t.title, t.category, t.sub_category, t.is_hidden_from_board,
+            COUNT(pr.id) AS report_count, MAX(pr.created_at) AS last_reported_at
+     FROM post_reports pr
+     JOIN tickets t ON t.id = pr.ticket_id
+     GROUP BY t.id, t.ticket_number, t.title, t.category, t.sub_category, t.is_hidden_from_board
+     ORDER BY last_reported_at DESC`
+  );
+  res.json({ success: true, reports: result.rows });
+}));
+
+router.patch('/board/:ticketId/hide', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
+  const { hidden = true } = req.body;
+  await query('UPDATE tickets SET is_hidden_from_board=$1, updated_at=NOW() WHERE id=$2', [hidden, req.params.ticketId]);
+  res.json({ success: true, message: hidden ? 'Post hidden from public board' : 'Post restored to public board' });
 }));
 
 // Events

@@ -1,9 +1,10 @@
 const { Pool } = require('pg');
 
-// Render internal connections don't need SSL; external ones do
+// Any remote Postgres host (Render, Neon, Supabase, ...) needs SSL; local dev doesn't
+const isLocal = /localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || '');
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('.render.com')
+  ssl: process.env.DATABASE_URL && !isLocal
     ? { rejectUnauthorized: false }
     : false,
 });

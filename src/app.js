@@ -54,6 +54,7 @@ async function startServer() {
     if (process.env.NODE_ENV === 'production') {
       await require('./db/migrate')();
       await require('./db/migrate_v2')();
+      await require('./db/migrate_v3')();
       await require('./db/seed')();
     }
   } catch (err) {

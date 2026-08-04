@@ -7,10 +7,17 @@ const { randomUUID: uuidv4 } = require('crypto');
 
 const router = Router();
 
-// List departments
+// List departments — this endpoint has no auth (mobile shows department names publicly),
+// so team_members must only expose non-sensitive columns. Never select password_hash here.
 router.get('/', asyncHandler(async (_req, res) => {
   const result = await query(
-    `SELECT d.*, json_agg(tm.*) FILTER (WHERE tm.id IS NOT NULL) AS members
+    `SELECT d.*,
+            json_agg(
+              json_build_object(
+                'id', tm.id, 'full_name', tm.full_name, 'username', tm.username,
+                'role', tm.role, 'is_active', tm.is_active, 'created_at', tm.created_at
+              )
+            ) FILTER (WHERE tm.id IS NOT NULL) AS members
      FROM departments d
      LEFT JOIN team_members tm ON tm.department_id = d.id
      GROUP BY d.id ORDER BY d.name`

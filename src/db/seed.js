@@ -1,10 +1,8 @@
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
-const bcrypt = require('bcryptjs');
 const { pool } = require('../config/db');
 const { DEPARTMENTS, ADMIN_USERNAME, ISSUE_CATEGORIES } = require('../config/constants');
 
 const ADMIN_EMAIL = 'sihsraushandc@gmail.com';
-const DEFAULT_PASSWORD = 'Admin@Samaj2026';
 
 async function seed() {
   try {
@@ -55,27 +53,18 @@ async function seed() {
     }
     console.log('✅ App settings seeded');
 
-    // Seed Admin_Raushan profile in admin_users
-    const adminHash = process.env.ADMIN_PASSWORD_HASH || await bcrypt.hash(DEFAULT_PASSWORD, 12);
-    await pool.query(
-      `INSERT INTO admin_users (username, full_name, email, password_hash, created_by)
-       VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (username) DO UPDATE SET email=EXCLUDED.email`,
-      [ADMIN_USERNAME, 'Raushan Kumar', ADMIN_EMAIL, adminHash, 'system']
-    ).catch(() => {});
-    console.log(`✅ Admin account: ${ADMIN_USERNAME} / email: ${ADMIN_EMAIL}`);
-
-    if (!process.env.ADMIN_PASSWORD_HASH) {
-      const hash = await bcrypt.hash(DEFAULT_PASSWORD, 12);
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ADMIN CREDENTIALS (change after first login!)              │');
-      console.log(`│  Username : ${ADMIN_USERNAME}                              │`);
-      console.log(`│  Password : ${DEFAULT_PASSWORD}                                  │`);
-      console.log(`│  Email    : ${ADMIN_EMAIL}                 │`);
-      console.log('│                                                             │');
-      console.log('│  Add this to .env to lock in the password:                 │');
-      console.log(`│  ADMIN_PASSWORD_HASH=${hash.slice(0,30)}... │`);
-      console.log('└─────────────────────────────────────────────────────────────┘\n');
+    // Seed Admin_Raushan profile in admin_users — password comes only from the
+    // pre-hashed ADMIN_PASSWORD_HASH env var, never a plaintext literal in source.
+    if (process.env.ADMIN_PASSWORD_HASH) {
+      await pool.query(
+        `INSERT INTO admin_users (username, full_name, email, password_hash, created_by)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (username) DO UPDATE SET email=EXCLUDED.email`,
+        [ADMIN_USERNAME, 'Raushan Kumar', ADMIN_EMAIL, process.env.ADMIN_PASSWORD_HASH, 'system']
+      ).catch(() => {});
+      console.log(`✅ Admin account ready: ${ADMIN_USERNAME} / email: ${ADMIN_EMAIL}`);
+    } else {
+      console.warn('⚠️  ADMIN_PASSWORD_HASH not set — skipping admin credential seed. Set it in your environment to bootstrap the admin account.');
     }
 
     console.log('✅ Seed v2 completed');

@@ -4,6 +4,7 @@ const { randomUUID: uuidv4 } = require('crypto');
 const { query } = require('../../config/db');
 const { ADMIN_USERNAME } = require('../../config/constants');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const { sendMail } = require('../../config/mailer');
 
 const generateTokens = (payload) => ({
   accessToken: jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }),
@@ -62,7 +63,7 @@ const verifyOtp = asyncHandler(async (req, res) => {
 
 // Complete registration
 const register = asyncHandler(async (req, res) => {
-  const { tempToken, fullName, email, gender, ageGroup, pincode, mandal, ward, colony, password } = req.body;
+  const { tempToken, fullName, email, gender, ageGroup, pincode, mandal, ward, colony, password, isCaregiverSignup, caregiverName, caregiverMobile } = req.body;
   let decoded;
   try {
     decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
@@ -80,10 +81,11 @@ const register = asyncHandler(async (req, res) => {
 
   const passwordHash = password ? await bcrypt.hash(password, 12) : null;
   const result = await query(
-    `INSERT INTO users (id, full_name, mobile, email, gender, age_group, pincode, mandal, ward, colony, password_hash, is_verified)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE) RETURNING *`,
+    `INSERT INTO users (id, full_name, mobile, email, gender, age_group, pincode, mandal, ward, colony, password_hash, is_verified, caregiver_name, caregiver_mobile)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12,$13) RETURNING *`,
     [uuidv4(), fullName, decoded.mobile, email || null, gender || null, ageGroup || null,
-     pincode || null, mandal || null, ward || null, colony || null, passwordHash]
+     pincode || null, mandal || null, ward || null, colony || null, passwordHash,
+     isCaregiverSignup ? (caregiverName || null) : null, isCaregiverSignup ? (caregiverMobile || null) : null]
   );
   const user = result.rows[0];
   const tokens = generateTokens({ id: user.id, role: 'citizen', mobile: user.mobile });
@@ -141,6 +143,62 @@ const login = asyncHandler(async (req, res) => {
   res.status(400).json({ success: false, message: 'Provide username or mobile' });
 });
 
+// Admin forgot password — only ever for Admin_Raushan, emails a 6-digit code to the
+// registered recovery address (never returned in the API response).
+const forgotAdminPassword = asyncHandler(async (req, res) => {
+  const { username } = req.body;
+  if (username !== ADMIN_USERNAME) {
+    // Same generic response either way — don't reveal which usernames are valid admins
+    return res.json({ success: true, message: 'If that account exists, a reset code has been sent.' });
+  }
+
+  const admin = await query('SELECT email FROM admin_users WHERE username=$1', [ADMIN_USERNAME]);
+  const email = admin.rows[0]?.email || process.env.ADMIN_EMAIL || 'sihsraushandc@gmail.com';
+
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const codeHash = await bcrypt.hash(code, 10);
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+
+  await query(
+    'INSERT INTO password_resets (id, username, code_hash, expires_at) VALUES ($1,$2,$3,$4)',
+    [uuidv4(), ADMIN_USERNAME, codeHash, expiresAt]
+  );
+
+  await sendMail({
+    to: email,
+    subject: 'Samaj Setu — Admin password reset code',
+    text: `Your password reset code is ${code}. It expires in 15 minutes. If you didn't request this, ignore this email.`,
+  });
+
+  res.json({ success: true, message: 'If that account exists, a reset code has been sent.' });
+});
+
+// Admin reset password — verifies the emailed code, sets the new password
+const resetAdminPassword = asyncHandler(async (req, res) => {
+  const { username, code, newPassword } = req.body;
+  if (username !== ADMIN_USERNAME) return res.status(400).json({ success: false, message: 'Invalid request' });
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+  }
+
+  const result = await query(
+    'SELECT * FROM password_resets WHERE username=$1 AND used=FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
+    [username]
+  );
+  if (!result.rows.length) return res.status(400).json({ success: false, message: 'Reset code expired or not found' });
+
+  const record = result.rows[0];
+  const valid = await bcrypt.compare(code, record.code_hash);
+  if (!valid) return res.status(400).json({ success: false, message: 'Invalid reset code' });
+
+  await query('UPDATE password_resets SET used=TRUE WHERE id=$1', [record.id]);
+
+  const hash = await bcrypt.hash(newPassword, 12);
+  await query('UPDATE admin_users SET password_hash=$1, updated_at=NOW() WHERE username=$2', [hash, username]);
+
+  res.json({ success: true, message: 'Password reset successfully. Please log in with your new password.' });
+});
+
 // Refresh JWT
 const refresh = asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
@@ -154,4 +212,4 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { sendOtp, verifyOtp, register, login, refresh };
+module.exports = { sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword };

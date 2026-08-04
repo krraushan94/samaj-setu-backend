@@ -1,16 +1,24 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const { query } = require('../../config/db');
-const { WOMEN_SAFETY_CATEGORIES, CATEGORY_DEPARTMENT_MAP } = require('../../config/constants');
+const { CATEGORY_DEPARTMENT_MAP, PAYMENT_EXEMPT_GROUPS, PAYMENT_EXEMPT_SUBCATEGORY_LABELS } = require('../../config/constants');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const { needsModerationReview } = require('../../utils/moderation');
 
 // Generate ticket number: SJT-2026-XXXXX
 const genTicketNumber = () => `SJT-${new Date().getFullYear()}-${Math.random().toString(36).toUpperCase().slice(2, 7)}`;
 
-// Auto-determine priority based on category + submitter gender
-const autoPriority = (category, gender, requestedPriority) => {
-  if (WOMEN_SAFETY_CATEGORIES.includes(category) && gender === 'female') return 'critical';
-  if (category === 'missing_child') return 'critical';
-  if (category === 'epidemic_alert') return 'critical';
+// Auto-determine priority based on category group + submitter gender.
+// `category` is the top-level group key (e.g. 'women_safety'); `subCategory` is the
+// human-readable sub-category label the app sends (e.g. 'Missing Child', 'Epidemic Alert') —
+// matched here rather than against machine slugs, since that's the actual shape of the data.
+const autoPriority = (category, subCategory, gender, requestedPriority) => {
+  if (category === 'women_safety' && gender === 'female') return 'critical';
+  if (subCategory === 'Missing Child') return 'critical';
+  if (subCategory === 'Epidemic Alert') return 'critical';
+  if (subCategory === 'Mental Health Crisis') return 'critical';
+  if (subCategory === 'Elder Abuse / Neglect' || subCategory === 'Caste-Based Discrimination') {
+    return requestedPriority === 'critical' ? 'critical' : 'high';
+  }
   return requestedPriority || 'medium';
 };
 
@@ -23,21 +31,29 @@ const createTicket = asyncHandler(async (req, res) => {
   const userResult = await query('SELECT gender FROM users WHERE id=$1', [userId]);
   const gender = userResult.rows[0]?.gender?.toLowerCase();
 
-  const finalPriority = autoPriority(subCategory || category, gender, priority);
+  const finalPriority = autoPriority(category, subCategory, gender, priority);
 
   // Route to department
   const deptResult = await query('SELECT id FROM departments WHERE name=$1', [CATEGORY_DEPARTMENT_MAP[category] || 'Others']);
   const departmentId = deptResult.rows[0]?.id || null;
 
+  // Infrastructure, women-safety and missing/emergency categories are fee-exempt — a citizen
+  // should never have to pay to report a public-good issue or a safety emergency. A few
+  // individual sub-categories (elder abuse, caste discrimination, mental health crisis) are
+  // exempt too even though their group is normally paid.
+  const paymentRequired = !PAYMENT_EXEMPT_GROUPS.includes(category) && !PAYMENT_EXEMPT_SUBCATEGORY_LABELS.includes(subCategory);
+  const initialStatus = paymentRequired ? 'payment_pending' : 'open';
+
   const ticketId = uuidv4();
   const ticketNumber = genTicketNumber();
+  const flaggedForReview = await needsModerationReview(`${title || ''} ${description || ''}`);
 
   await query(
     `INSERT INTO tickets (id, ticket_number, user_id, category, sub_category, title, description,
-      latitude, longitude, location_text, priority, status, department_id, is_anonymous)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'payment_pending',$12,$13)`,
+      latitude, longitude, location_text, priority, status, department_id, is_anonymous, needs_review)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
     [ticketId, ticketNumber, userId, category, subCategory, title, description,
-     latitude || null, longitude || null, locationText || null, finalPriority, departmentId, isAnonymous || false]
+     latitude || null, longitude || null, locationText || null, finalPriority, initialStatus, departmentId, isAnonymous || false, flaggedForReview]
   );
 
   // Audit log
@@ -46,10 +62,14 @@ const createTicket = asyncHandler(async (req, res) => {
     [uuidv4(), userId, 'citizen', 'ticket_created', 'tickets', ticketId, req.ip]
   );
 
-  res.status(201).json({ success: true, ticketId, ticketNumber, priority: finalPriority, status: 'payment_pending' });
+  res.status(201).json({ success: true, ticketId, ticketNumber, priority: finalPriority, status: initialStatus, paymentRequired });
 });
 
-// List tickets — role-based filtering
+// List tickets — role-based filtering.
+// Team leaders/members see tickets across ALL departments (so the team has visibility into
+// what's happening elsewhere), but only their own department is actionable — `canManage` tells
+// the client whether to show action buttons for a given row. Cross-department edits are still
+// blocked server-side in updateStatus/addNote regardless of what the client does with this flag.
 const listTickets = asyncHandler(async (req, res) => {
   const { status, priority, category, page = 1, limit = 20 } = req.query;
   const offset = (page - 1) * limit;
@@ -58,10 +78,8 @@ const listTickets = asyncHandler(async (req, res) => {
 
   if (req.user.role === 'citizen') {
     conditions.push(`t.user_id = $${params.push(req.user.id)}`);
-  } else if (req.user.role === 'leader') {
-    conditions.push(`t.department_id = $${params.push(req.user.departmentId)}`);
   }
-  // admin sees all
+  // leader / member / admin all see every ticket — canManage distinguishes own-department
 
   if (status) conditions.push(`t.status = $${params.push(status)}`);
   if (priority) conditions.push(`t.priority = $${params.push(priority)}`);
@@ -79,13 +97,20 @@ const listTickets = asyncHandler(async (req, res) => {
      LIMIT $${params.push(limit)} OFFSET $${params.push(offset)}`,
     params
   );
-  res.json({ success: true, tickets: result.rows, page: +page, limit: +limit });
+
+  const isTeamRole = req.user.role === 'leader' || req.user.role === 'member';
+  const tickets = result.rows.map((t) => ({
+    ...t,
+    canManage: req.user.role === 'admin' ? true : isTeamRole ? t.department_id === req.user.departmentId : false,
+  }));
+
+  res.json({ success: true, tickets, page: +page, limit: +limit });
 });
 
 // Get single ticket
 const getTicket = asyncHandler(async (req, res) => {
   const result = await query(
-    `SELECT t.*, u.full_name, u.mobile, u.gender, u.ward, d.name AS department_name,
+    `SELECT t.*, u.full_name, u.mobile, u.gender, u.ward, u.caregiver_name, u.caregiver_mobile, d.name AS department_name,
             json_agg(DISTINCT ma.*) FILTER (WHERE ma.id IS NOT NULL) AS media,
             json_agg(DISTINCT th.*) FILTER (WHERE th.id IS NOT NULL) AS history
      FROM tickets t
@@ -94,14 +119,17 @@ const getTicket = asyncHandler(async (req, res) => {
      LEFT JOIN media_attachments ma ON ma.ticket_id = t.id
      LEFT JOIN ticket_history th ON th.ticket_id = t.id
      WHERE t.id = $1
-     GROUP BY t.id, u.full_name, u.mobile, u.gender, u.ward, d.name`,
+     GROUP BY t.id, u.full_name, u.mobile, u.gender, u.ward, u.caregiver_name, u.caregiver_mobile, d.name`,
     [req.params.id]
   );
   if (!result.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
   const ticket = result.rows[0];
-  // Mask mobile for non-admin, non-leader
-  if (req.user.role === 'citizen') delete ticket.mobile;
+  // Mask mobile/caregiver contact for citizens — only team/admin need it to reach a caregiver
+  if (req.user.role === 'citizen') { delete ticket.mobile; delete ticket.caregiver_name; delete ticket.caregiver_mobile; }
+
+  const isTeamRole = req.user.role === 'leader' || req.user.role === 'member';
+  ticket.canManage = req.user.role === 'admin' ? true : isTeamRole ? ticket.department_id === req.user.departmentId : false;
 
   res.json({ success: true, ticket });
 });
@@ -163,9 +191,25 @@ const rateTicket = asyncHandler(async (req, res) => {
 // Assign ticket to team member
 const assignTicket = asyncHandler(async (req, res) => {
   const { assignedTo, departmentId } = req.body;
+  const { id } = req.params;
+
+  const current = await query('SELECT department_id FROM tickets WHERE id=$1', [id]);
+  if (!current.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
+
+  // Team leaders can only assign within their own department, and can't move a ticket
+  // to a different department (only admin can re-route)
+  if (req.user.role === 'leader') {
+    if (current.rows[0].department_id !== req.user.departmentId) {
+      return res.status(403).json({ success: false, message: 'Not your department' });
+    }
+    if (departmentId && departmentId !== req.user.departmentId) {
+      return res.status(403).json({ success: false, message: 'Only admin can move a ticket to another department' });
+    }
+  }
+
   await query(
     'UPDATE tickets SET assigned_to=$1, department_id=COALESCE($2, department_id), updated_at=NOW() WHERE id=$3',
-    [assignedTo || null, departmentId || null, req.params.id]
+    [assignedTo || null, departmentId || null, id]
   );
   res.json({ success: true, message: 'Ticket assigned' });
 });
@@ -173,9 +217,19 @@ const assignTicket = asyncHandler(async (req, res) => {
 // Add internal note
 const addNote = asyncHandler(async (req, res) => {
   const { note } = req.body;
+  const { id } = req.params;
+
+  if (req.user.role === 'leader') {
+    const current = await query('SELECT department_id FROM tickets WHERE id=$1', [id]);
+    if (!current.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
+    if (current.rows[0].department_id !== req.user.departmentId) {
+      return res.status(403).json({ success: false, message: 'Not your department' });
+    }
+  }
+
   await query(
     'INSERT INTO ticket_history (id, ticket_id, changed_by, role, note) VALUES ($1,$2,$3,$4,$5)',
-    [uuidv4(), req.params.id, req.user.username || req.user.id, req.user.role, note]
+    [uuidv4(), id, req.user.username || req.user.id, req.user.role, note]
   );
   res.json({ success: true, message: 'Note added' });
 });
@@ -196,11 +250,17 @@ const sosTicket = asyncHandler(async (req, res) => {
   await query(
     `INSERT INTO tickets (id, ticket_number, user_id, category, sub_category, title, description,
       latitude, longitude, location_text, priority, status, department_id)
-     VALUES ($1,$2,$3,'women_safety','unsafe_area','SOS EMERGENCY','Emergency SOS triggered',$4,$5,$6,'critical','open',$7)`,
+     VALUES ($1,$2,$3,'women_safety','Unsafe Area','🚨 SOS EMERGENCY','Emergency SOS triggered',$4,$5,$6,'critical','open',$7)`,
     [ticketId, ticketNumber, userId, latitude || null, longitude || null, locationText || 'Location not provided', departmentId]
   );
 
-  res.status(201).json({ success: true, ticketId, ticketNumber, message: 'SOS alert sent to Social Welfare team' });
+  // Audit log — same pattern as createTicket, so SOS triggers are traceable too
+  await query(
+    'INSERT INTO audit_logs (id, actor_id, actor_role, action, entity, entity_id, ip_address) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+    [uuidv4(), userId, 'citizen', 'sos_triggered', 'tickets', ticketId, req.ip]
+  );
+
+  res.status(201).json({ success: true, ticketId, ticketNumber, message: 'SOS alert sent — the Social Welfare team has been notified. Help is on the way.' });
 });
 
 module.exports = { createTicket, listTickets, getTicket, updateStatus, upvoteTicket, rateTicket, assignTicket, addNote, sosTicket };

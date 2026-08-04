@@ -3,11 +3,13 @@ const { asyncHandler } = require('../../middleware/errorHandler');
 
 // Master dashboard stats
 const getDashboardStats = asyncHandler(async (_req, res) => {
-  const [tickets, payments, users, criticalTickets] = await Promise.all([
+  const [tickets, payments, users, criticalTickets, needsReview, reportedPosts] = await Promise.all([
     query(`SELECT status, COUNT(*) AS count FROM tickets GROUP BY status`),
     query(`SELECT status, COALESCE(SUM(amount),0) AS total FROM payments GROUP BY status`),
     query(`SELECT COUNT(*) AS total FROM users WHERE is_blocked=FALSE`),
     query(`SELECT COUNT(*) AS count FROM tickets WHERE priority='critical' AND status NOT IN ('resolved','closed')`),
+    query(`SELECT COUNT(*) AS count FROM tickets WHERE needs_review=TRUE`),
+    query(`SELECT COUNT(DISTINCT ticket_id) AS count FROM post_reports`),
   ]);
 
   const ticketStats = Object.fromEntries(tickets.rows.map(r => [r.status, +r.count]));
@@ -22,6 +24,8 @@ const getDashboardStats = asyncHandler(async (_req, res) => {
       totalUsers: +users.rows[0].total,
       cashCollected: paymentStats.confirmed || 0,
       cashPending: paymentStats.pending || 0,
+      needsReview: +needsReview.rows[0].count,
+      reportedPosts: +reportedPosts.rows[0].count,
     },
   });
 });
