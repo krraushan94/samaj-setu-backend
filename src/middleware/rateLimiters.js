@@ -1,4 +1,4 @@
-const rateLimit = require('express-rate-limit');
+const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 
 // All limiters use the default in-memory store — appropriate for a single Render free-tier
 // instance (no Redis needed). Sizes are deliberately generous for genuine use, tight enough
@@ -11,7 +11,7 @@ const otpLimiter = rateLimit({
   max: 3,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => `${req.ip}:${req.body?.mobile || ''}`,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip)}:${req.body?.mobile || ''}`,
   message: { success: false, message: 'Too many OTP requests. Please try again in a few minutes.' },
 });
 
@@ -22,7 +22,7 @@ const loginLimiter = rateLimit({
   max: 8,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => `${req.ip}:${req.body?.username || req.body?.mobile || ''}`,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip)}:${req.body?.username || req.body?.mobile || ''}`,
   message: { success: false, message: 'Too many login attempts. Please try again later.' },
 });
 
@@ -33,7 +33,7 @@ const ticketCreateLimiter = rateLimit({
   max: 15,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.user?.id || req.ip,
+  keyGenerator: (req) => req.user?.id || ipKeyGenerator(req.ip),
   message: { success: false, message: 'Too many issues submitted recently. Please try again later.' },
 });
 

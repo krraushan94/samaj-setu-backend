@@ -1,4 +1,4 @@
-const Filter = require('bad-words');
+const { Filter } = require('bad-words');
 const { query } = require('../config/db');
 
 const filter = new Filter();
