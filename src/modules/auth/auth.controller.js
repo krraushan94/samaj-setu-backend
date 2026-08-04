@@ -53,8 +53,9 @@ const verifyOtp = asyncHandler(async (req, res) => {
   const user = userResult.rows[0];
 
   if (user) {
+    const { password_hash, ...safeUser } = user;
     const tokens = generateTokens({ id: user.id, role: 'citizen', mobile: user.mobile });
-    return res.json({ success: true, isNewUser: false, ...tokens, user });
+    return res.json({ success: true, isNewUser: false, ...tokens, user: safeUser });
   }
   // New user — return temp token for registration completion
   const tempToken = jwt.sign({ mobile, role: 'pending' }, process.env.JWT_SECRET, { expiresIn: '30m' });
@@ -87,9 +88,9 @@ const register = asyncHandler(async (req, res) => {
      pincode || null, mandal || null, ward || null, colony || null, passwordHash,
      isCaregiverSignup ? (caregiverName || null) : null, isCaregiverSignup ? (caregiverMobile || null) : null]
   );
-  const user = result.rows[0];
-  const tokens = generateTokens({ id: user.id, role: 'citizen', mobile: user.mobile });
-  res.status(201).json({ success: true, ...tokens, user });
+  const { password_hash, ...safeUser } = result.rows[0];
+  const tokens = generateTokens({ id: safeUser.id, role: 'citizen', mobile: safeUser.mobile });
+  res.status(201).json({ success: true, ...tokens, user: safeUser });
 });
 
 // Login (citizen password, team leader, admin)
@@ -125,8 +126,9 @@ const login = asyncHandler(async (req, res) => {
     if (!member) return res.status(401).json({ success: false, message: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, member.password_hash);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    const { password_hash, ...safeMember } = member;
     const tokens = generateTokens({ id: member.id, role: member.role, departmentId: member.department_id, username });
-    return res.json({ success: true, role: member.role, member, ...tokens });
+    return res.json({ success: true, role: member.role, member: safeMember, ...tokens });
   }
 
   // Citizen password login
@@ -136,8 +138,9 @@ const login = asyncHandler(async (req, res) => {
     if (!user || !user.password_hash) return res.status(401).json({ success: false, message: 'Invalid credentials' });
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    const { password_hash, ...safeUser } = user;
     const tokens = generateTokens({ id: user.id, role: 'citizen', mobile: user.mobile });
-    return res.json({ success: true, role: 'citizen', user, ...tokens });
+    return res.json({ success: true, role: 'citizen', user: safeUser, ...tokens });
   }
 
   res.status(400).json({ success: false, message: 'Provide username or mobile' });

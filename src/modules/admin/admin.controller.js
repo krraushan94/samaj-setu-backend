@@ -50,6 +50,9 @@ const browseTable = asyncHandler(async (req, res) => {
   const total = +countResult.rows[0].count;
 
   const result = await query(`SELECT * FROM "${table}" ORDER BY created_at DESC LIMIT $1 OFFSET $2`, [limit, offset]);
+  // Never surface password hashes, even to Admin_Raushan — there's no legitimate use for them
+  // here and it's needless exposure if this screen is ever shared or the session compromised.
+  result.rows.forEach((row) => delete row.password_hash);
 
   res.json({ success: true, table, total, page: +page, limit: +limit, rows: result.rows });
 });
@@ -86,6 +89,7 @@ const exportTable = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Table not allowed' });
   }
   const result = await query(`SELECT * FROM "${table}" ORDER BY created_at DESC`);
+  result.rows.forEach((row) => delete row.password_hash);
   if (!result.rows.length) return res.json({ success: true, csv: '' });
 
   const headers = Object.keys(result.rows[0]).join(',');
