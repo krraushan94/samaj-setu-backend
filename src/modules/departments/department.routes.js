@@ -28,6 +28,12 @@ router.get('/', asyncHandler(async (_req, res) => {
 // Add team member to department (admin only)
 router.post('/:id/members', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
   const { fullName, username, password, role } = req.body;
+  if (!fullName || !username || !password) {
+    return res.status(400).json({ success: false, message: 'Full name, username and password are required' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+  }
   const passwordHash = await bcrypt.hash(password, 12);
   await query(
     'INSERT INTO team_members (id, department_id, full_name, username, password_hash, role) VALUES ($1,$2,$3,$4,$5,$6)',

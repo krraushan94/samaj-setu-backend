@@ -242,6 +242,9 @@ router.patch('/departments/:id', verifyToken, requireAdmin, asyncHandler(async (
 router.patch('/team-members/:id', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
   const { fullName, role, departmentId, isActive, newPassword } = req.body;
   if (newPassword) {
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+    }
     const hash = await bcrypt.hash(newPassword, 12);
     await query('UPDATE team_members SET password_hash=$1 WHERE id=$2', [hash, req.params.id]);
   }
