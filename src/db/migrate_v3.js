@@ -40,8 +40,15 @@ const migration = `
 const ADMIN_PASSWORD_FLAG = 'admin_password_2026_applied';
 
 async function applyConfirmedAdminPasswordOnce() {
-  const flag = await pool.query('SELECT 1 FROM app_settings WHERE key=$1', [ADMIN_PASSWORD_FLAG]);
-  if (flag.rows.length) return; // already applied — never overwrite a later manual change
+  // FORCE_ADMIN_PASSWORD_RESET=true bypasses the one-time guard below — an explicit,
+  // deliberate override for when the locked-in hash needs correcting. Remove the env
+  // var afterward; leaving it set just means every future boot re-applies the hash.
+  const forceReset = process.env.FORCE_ADMIN_PASSWORD_RESET === 'true';
+
+  if (!forceReset) {
+    const flag = await pool.query('SELECT 1 FROM app_settings WHERE key=$1', [ADMIN_PASSWORD_FLAG]);
+    if (flag.rows.length) return; // already applied — never overwrite a later manual change
+  }
 
   const hash = process.env.ADMIN_PASSWORD_HASH;
   if (!hash) {
@@ -56,10 +63,10 @@ async function applyConfirmedAdminPasswordOnce() {
   );
   await pool.query(
     `INSERT INTO app_settings (key, value, label, updated_by) VALUES ($1, 'true', 'Admin password set (one-time, 2026)', 'system')
-     ON CONFLICT (key) DO NOTHING`,
+     ON CONFLICT (key) DO UPDATE SET value = 'true'`,
     [ADMIN_PASSWORD_FLAG]
   );
-  console.log(`✅ ${ADMIN_USERNAME} password bootstrapped from ADMIN_PASSWORD_HASH (one-time — future changes via the app are preserved)`);
+  console.log(`✅ ${ADMIN_USERNAME} password bootstrapped from ADMIN_PASSWORD_HASH (${forceReset ? 'forced' : 'one-time'})`);
 }
 
 async function migrate() {
