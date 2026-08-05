@@ -1,11 +1,16 @@
 const { query } = require('../../config/db');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const { ADMIN_USERNAME } = require('../../config/constants');
 
-// Master dashboard stats
-const getDashboardStats = asyncHandler(async (_req, res) => {
+// Master dashboard stats — cash figures are omitted for sub-admins (financial data
+// stays with Admin_Raushan only); everything else is fine for any admin to see.
+const getDashboardStats = asyncHandler(async (req, res) => {
+  const isPrimaryAdmin = req.user?.username === ADMIN_USERNAME;
   const [tickets, payments, users, criticalTickets, needsReview, reportedPosts] = await Promise.all([
     query(`SELECT status, COUNT(*) AS count FROM tickets GROUP BY status`),
-    query(`SELECT status, COALESCE(SUM(amount),0) AS total FROM payments GROUP BY status`),
+    isPrimaryAdmin
+      ? query(`SELECT status, COALESCE(SUM(amount),0) AS total FROM payments GROUP BY status`)
+      : Promise.resolve({ rows: [] }),
     query(`SELECT COUNT(*) AS total FROM users WHERE is_blocked=FALSE`),
     query(`SELECT COUNT(*) AS count FROM tickets WHERE priority='critical' AND status NOT IN ('resolved','closed')`),
     query(`SELECT COUNT(*) AS count FROM tickets WHERE needs_review=TRUE`),
@@ -22,8 +27,7 @@ const getDashboardStats = asyncHandler(async (_req, res) => {
       totalTickets: Object.values(ticketStats).reduce((a, b) => a + b, 0),
       criticalActive: +criticalTickets.rows[0].count,
       totalUsers: +users.rows[0].total,
-      cashCollected: paymentStats.confirmed || 0,
-      cashPending: paymentStats.pending || 0,
+      ...(isPrimaryAdmin ? { cashCollected: paymentStats.confirmed || 0, cashPending: paymentStats.pending || 0 } : {}),
       needsReview: +needsReview.rows[0].count,
       reportedPosts: +reportedPosts.rows[0].count,
     },

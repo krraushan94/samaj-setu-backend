@@ -53,6 +53,16 @@ const PRIORITIES      = ['low', 'medium', 'high', 'critical'];
 const DEPARTMENTS     = ['Politics', 'Marketing', 'Social Welfare', 'Others'];
 const ADMIN_USERNAME  = process.env.ADMIN_USERNAME || 'Admin_Raushan';
 
+// Admin_Raushan (the primary admin) plus up to 5 more admin accounts he creates directly.
+const MAX_TOTAL_ADMINS = 6;
+
+// "Others" is a catch-all department that can flex wider than the rest; every other
+// department is capped tighter since it maps to a single real-world team.
+const UNCAPPED_MEMBERS_DEPARTMENT = 'Others';
+const MAX_TEAM_LEADERS_OTHERS  = 5;
+const MAX_TEAM_LEADERS_DEFAULT = 2;
+const MAX_TEAM_MEMBERS_DEFAULT = 20;
+
 module.exports = {
   WOMEN_SAFETY_CATEGORIES,
   ISSUE_CATEGORIES,
@@ -65,4 +75,9 @@ module.exports = {
   PRIORITIES,
   DEPARTMENTS,
   ADMIN_USERNAME,
+  MAX_TOTAL_ADMINS,
+  UNCAPPED_MEMBERS_DEPARTMENT,
+  MAX_TEAM_LEADERS_OTHERS,
+  MAX_TEAM_LEADERS_DEFAULT,
+  MAX_TEAM_MEMBERS_DEFAULT,
 };

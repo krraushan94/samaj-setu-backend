@@ -1,10 +1,10 @@
 const { Router } = require('express');
 const bcrypt = require('bcryptjs');
 const { randomUUID: uuidv4 } = require('crypto');
-const { verifyToken, requireAdmin, requireTeamLeader } = require('../../middleware/auth');
+const { verifyToken, requireAdmin, requirePrimaryAdmin, requireTeamLeader } = require('../../middleware/auth');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { query } = require('../../config/db');
-const { ADMIN_USERNAME } = require('../../config/constants');
+const { ADMIN_USERNAME, MAX_TOTAL_ADMINS } = require('../../config/constants');
 
 const router = Router();
 
@@ -39,16 +39,18 @@ router.patch('/change-password', verifyToken, requireAdmin, asyncHandler(async (
 }));
 
 // ── Sub-Admin Management (only Admin_Raushan) ──────────────────────────────────
-router.get('/sub-admins', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
-  if (req.user.username !== ADMIN_USERNAME) return res.status(403).json({ success: false, message: 'Only Admin_Raushan can manage sub-admins' });
+router.get('/sub-admins', verifyToken, requirePrimaryAdmin, asyncHandler(async (req, res) => {
   const result = await query('SELECT id, username, full_name, email, phone, is_active, last_login, created_at FROM admin_users ORDER BY created_at');
   res.json({ success: true, admins: result.rows });
 }));
 
-router.post('/sub-admins', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
-  if (req.user.username !== ADMIN_USERNAME) return res.status(403).json({ success: false, message: 'Only Admin_Raushan can create admin accounts' });
+router.post('/sub-admins', verifyToken, requirePrimaryAdmin, asyncHandler(async (req, res) => {
   const { username, fullName, email, phone, password } = req.body;
   if (!username || !password || password.length < 8) return res.status(400).json({ success: false, message: 'Username and password (8+ chars) required' });
+  const countResult = await query('SELECT COUNT(*) FROM admin_users');
+  if (+countResult.rows[0].count >= MAX_TOTAL_ADMINS) {
+    return res.status(403).json({ success: false, message: `Maximum of ${MAX_TOTAL_ADMINS} admin accounts reached (Admin_Raushan + ${MAX_TOTAL_ADMINS - 1} more)` });
+  }
   const existing = await query('SELECT id FROM admin_users WHERE username=$1', [username]);
   if (existing.rows.length) return res.status(409).json({ success: false, message: 'Username already taken' });
   const hash = await bcrypt.hash(password, 12);
@@ -60,10 +62,12 @@ router.post('/sub-admins', verifyToken, requireAdmin, asyncHandler(async (req, r
   res.status(201).json({ success: true, id, message: `Sub-admin "${username}" created` });
 }));
 
-router.patch('/sub-admins/:id', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
-  if (req.user.username !== ADMIN_USERNAME) return res.status(403).json({ success: false, message: 'Only Admin_Raushan can modify admin accounts' });
+router.patch('/sub-admins/:id', verifyToken, requirePrimaryAdmin, asyncHandler(async (req, res) => {
   const { fullName, email, phone, isActive, newPassword } = req.body;
   if (newPassword) {
+    if (newPassword.length < 8) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
+    }
     const hash = await bcrypt.hash(newPassword, 12);
     await query('UPDATE admin_users SET password_hash=$1, updated_at=NOW() WHERE id=$2', [hash, req.params.id]);
   }
@@ -74,8 +78,7 @@ router.patch('/sub-admins/:id', verifyToken, requireAdmin, asyncHandler(async (r
   res.json({ success: true, message: 'Sub-admin updated' });
 }));
 
-router.delete('/sub-admins/:id', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
-  if (req.user.username !== ADMIN_USERNAME) return res.status(403).json({ success: false, message: 'Only Admin_Raushan can delete admin accounts' });
+router.delete('/sub-admins/:id', verifyToken, requirePrimaryAdmin, asyncHandler(async (req, res) => {
   // Prevent deleting Admin_Raushan itself
   const target = await query('SELECT username FROM admin_users WHERE id=$1', [req.params.id]);
   if (target.rows[0]?.username === ADMIN_USERNAME) return res.status(403).json({ success: false, message: 'Cannot delete primary admin' });
