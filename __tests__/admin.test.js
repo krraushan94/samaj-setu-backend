@@ -4,24 +4,44 @@ const request = require('supertest');
 jest.mock('../src/config/db', () => require('./helpers/dbMock').dbMockFactory());
 
 const app = require('../src/app');
-const { adminToken, citizenToken, leaderToken } = require('./helpers/fixtures');
+const { adminToken, citizenToken, leaderToken, subAdminToken } = require('./helpers/fixtures');
 
 beforeEach(() => mockQuery.mockReset());
 
 // ─── Master Stats ──────────────────────────────────────────────────────────────
 describe('GET /api/admin/stats', () => {
   it('Admin_Raushan can access master stats', async () => {
-    // Must mock all 4 parallel queries in getDashboardStats
+    // Must mock all 6 parallel queries in getDashboardStats
     mockQuery
       .mockResolvedValueOnce({ rows: [{ status: 'open', count: '10' }] })           // tickets by status
-      .mockResolvedValueOnce({ rows: [{ status: 'pending', total: '500' }] })       // payments by status
+      .mockResolvedValueOnce({ rows: [{ status: 'pending', total: '500' }] })       // payments by status (Admin_Raushan only)
       .mockResolvedValueOnce({ rows: [{ total: '120' }] })                          // total users
-      .mockResolvedValueOnce({ rows: [{ count: '3' }] });                           // critical active
+      .mockResolvedValueOnce({ rows: [{ count: '3' }] })                           // critical active
+      .mockResolvedValueOnce({ rows: [{ count: '2' }] })                           // needs review
+      .mockResolvedValueOnce({ rows: [{ count: '1' }] });                          // reported posts
     const res = await request(app)
       .get('/api/admin/stats')
       .set('Authorization', `Bearer ${adminToken()}`);
     expect(res.status).toBe(200);
     expect(res.body.stats).toBeDefined();
+    expect(res.body.stats.cashCollected).toBeDefined(); // primary admin sees cash figures
+  });
+
+  it('sub-admin sees stats without cash figures', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ status: 'open', count: '10' }] })  // tickets by status
+      // no payments query for a sub-admin — isPrimaryAdmin gates it out entirely
+      .mockResolvedValueOnce({ rows: [{ total: '120' }] })                 // total users
+      .mockResolvedValueOnce({ rows: [{ count: '3' }] })                   // critical active
+      .mockResolvedValueOnce({ rows: [{ count: '2' }] })                   // needs review
+      .mockResolvedValueOnce({ rows: [{ count: '1' }] });                  // reported posts
+    const res = await request(app)
+      .get('/api/admin/stats')
+      .set('Authorization', `Bearer ${subAdminToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.stats.cashCollected).toBeUndefined();
+    expect(res.body.stats.cashPending).toBeUndefined();
+    expect(res.body.stats.totalUsers).toBe(120);
   });
 
   it('team leader cannot access admin stats', async () => {

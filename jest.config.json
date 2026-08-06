@@ -7,6 +7,7 @@
   "coveragePathIgnorePatterns": ["/node_modules/", "/src/db/"],
   "setupFiles": ["<rootDir>/__tests__/setup.js"],
   "moduleNameMapper": {
-    "^uuid$": "<rootDir>/__mocks__/uuid.js"
+    "^uuid$": "<rootDir>/__mocks__/uuid.js",
+    "^bad-words$": "<rootDir>/__mocks__/bad-words.js"
   }
 }

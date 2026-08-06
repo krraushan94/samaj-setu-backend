@@ -252,6 +252,7 @@ describe('STRESS TEST — 20 Dummy Users, All Categories, All Flows', () => {
   describe('8. Sub-Admin Creation — only Admin_Raushan', () => {
     it('Admin_Raushan creates a sub-admin', async () => {
       mockQuery
+        .mockResolvedValueOnce({ rows: [{ count: '1' }] })  // admin count (under cap)
         .mockResolvedValueOnce({ rows: [] })  // check existing
         .mockResolvedValueOnce({ rows: [] }); // insert
       const res = await request(app).post('/api/admin/sub-admins').set('Authorization', `Bearer ${adminToken()}`)
@@ -261,10 +262,19 @@ describe('STRESS TEST — 20 Dummy Users, All Categories, All Flows', () => {
     });
 
     it('duplicate username is rejected', async () => {
-      mockQuery.mockResolvedValueOnce({ rows: [{ id: 'existing' }] });
+      mockQuery
+        .mockResolvedValueOnce({ rows: [{ count: '1' }] })  // admin count (under cap)
+        .mockResolvedValueOnce({ rows: [{ id: 'existing' }] }); // check existing
       const res = await request(app).post('/api/admin/sub-admins').set('Authorization', `Bearer ${adminToken()}`)
         .send({ username: 'admin_support1', password: 'pass1234' });
       expect(res.status).toBe(409);
+    });
+
+    it('6th admin (cap of 6 total) is rejected', async () => {
+      mockQuery.mockResolvedValueOnce({ rows: [{ count: '6' }] }); // already at cap
+      const res = await request(app).post('/api/admin/sub-admins').set('Authorization', `Bearer ${adminToken()}`)
+        .send({ username: 'one_too_many', password: 'pass1234' });
+      expect(res.status).toBe(403);
     });
 
     it('password too short is rejected', async () => {

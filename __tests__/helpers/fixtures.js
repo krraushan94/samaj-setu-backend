@@ -7,6 +7,7 @@ const citizenToken  = () => sign({ id: 'user-uuid-1', role: 'citizen', mobile: '
 const leaderToken   = () => sign({ id: 'team-uuid-1', role: 'leader', departmentId: 'dept-uuid-1', username: 'team_leader1' });
 const adminToken    = () => sign({ id: 'admin', role: 'admin', username: 'Admin_Raushan' });
 const memberToken   = () => sign({ id: 'team-uuid-2', role: 'member', departmentId: 'dept-uuid-1' });
+const subAdminToken = () => sign({ id: 'sub-admin-uuid-1', role: 'admin', username: 'sub_admin1' });
 
 const mockUser = {
   id: 'user-uuid-1', full_name: 'Test Citizen', mobile: '9999900000',
@@ -29,4 +30,4 @@ const mockPayment = {
   status: 'pending', created_at: new Date().toISOString(),
 };
 
-module.exports = { citizenToken, leaderToken, adminToken, memberToken, mockUser, mockTicket, mockPayment };
+module.exports = { citizenToken, leaderToken, adminToken, memberToken, subAdminToken, mockUser, mockTicket, mockPayment };

@@ -149,12 +149,26 @@ describe('Departments', () => {
   });
 
   it('admin can add team member to department', async () => {
-    mockQuery.mockResolvedValue({ rows: [] });
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ name: 'Social Welfare' }] }) // department lookup (cap check)
+      .mockResolvedValueOnce({ rows: [{ count: '0' }] })             // existing leader count (cap check)
+      .mockResolvedValueOnce({ rows: [] });                          // insert
     const res = await request(app)
       .post('/api/departments/dept-uuid-1/members')
       .set('Authorization', `Bearer ${adminToken()}`)
       .send({ fullName: 'New Leader', username: 'new_leader', password: 'SecurePass@123', role: 'leader' });
     expect(res.status).toBe(201);
+  });
+
+  it('rejects adding a 3rd team leader to a standard department (cap of 2)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ name: 'Social Welfare' }] }) // department lookup
+      .mockResolvedValueOnce({ rows: [{ count: '2' }] });             // already at cap
+    const res = await request(app)
+      .post('/api/departments/dept-uuid-1/members')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ fullName: 'Third Leader', username: 'third_leader', password: 'SecurePass@123', role: 'leader' });
+    expect(res.status).toBe(403);
   });
 
   it('citizen cannot add team members', async () => {
@@ -171,5 +185,29 @@ describe('Departments', () => {
       .delete('/api/departments/members/member-uuid-1')
       .set('Authorization', `Bearer ${adminToken()}`);
     expect(res.status).toBe(200);
+  });
+
+  it('team leader can add a member to their own department', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ name: 'Social Welfare' }] }) // department lookup
+      .mockResolvedValueOnce({ rows: [{ count: '0' }] })             // existing member count
+      .mockResolvedValueOnce({ rows: [] });                          // insert
+    const res = await request(app)
+      .post('/api/departments/members')
+      .set('Authorization', `Bearer ${leaderToken()}`)
+      .send({ fullName: 'Leader Added Member', username: 'leader_added', password: 'SecurePass@123' });
+    expect(res.status).toBe(201);
+  });
+
+  it('admin (passes requireTeamLeader but is not a "leader") is rejected by the self-add-member route', async () => {
+    // Confirms the route's own role==='leader' check, not just the requireTeamLeader
+    // middleware (which would let admin through) — admin has its own
+    // POST /departments/:id/members route for this instead.
+    const res = await request(app)
+      .post('/api/departments/members')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ fullName: 'x', username: 'y', password: 'SecurePass@123' });
+    expect(res.status).toBe(403);
+    expect(res.body.message).toContain('Only team leaders');
   });
 });
