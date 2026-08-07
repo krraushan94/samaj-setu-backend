@@ -22,6 +22,7 @@ const DUMMY_USERS = Array.from({ length: 20 }, (_, i) => ({
   ward:      String((i % 10) + 1),
   mandal:    'New Town',
   pincode:   '700157',
+  colony:    'Hatiara',
 }));
 
 const ALL_CATEGORIES = [
@@ -69,10 +70,11 @@ describe('STRESS TEST — 20 Dummy Users, All Categories, All Flows', () => {
         mockQuery
           .mockResolvedValueOnce({ rows: [] })        // check no existing user
           .mockResolvedValueOnce({ rows: [{ ...user, id: user.id }] }); // insert returns user
+        const [firstName, ...rest] = user.full_name.split(' ');
         const regRes = await request(app).post('/api/auth/register').send({
           tempToken: verifyRes.body.tempToken,
-          fullName: user.full_name, mobile: user.mobile,
-          gender: user.gender, pincode: user.pincode, mandal: user.mandal, ward: user.ward,
+          firstName, lastName: rest.join(' ') || firstName, mobile: user.mobile,
+          gender: user.gender, pincode: user.pincode, mandal: user.mandal, ward: user.ward, colony: user.colony,
         });
         expect(regRes.status).toBe(201);
         expect(regRes.body.accessToken).toBeDefined();

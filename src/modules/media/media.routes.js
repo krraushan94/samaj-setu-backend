@@ -22,7 +22,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max
   fileFilter: (_req, file, cb) => {
-    const allowed = /jpeg|jpg|png|gif|mp4|mov|mpeg|mp3|wav|aac|ogg/;
+    const allowed = /jpeg|jpg|png|gif|mp4|mov|mpeg|mp3|wav|aac|ogg|m4a|3gp/;
     cb(null, allowed.test(path.extname(file.originalname).toLowerCase()));
   },
 });

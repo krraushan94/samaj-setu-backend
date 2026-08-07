@@ -64,7 +64,7 @@ const verifyOtp = asyncHandler(async (req, res) => {
 
 // Complete registration
 const register = asyncHandler(async (req, res) => {
-  const { tempToken, fullName, email, gender, ageGroup, pincode, mandal, ward, colony, password, isCaregiverSignup, caregiverName, caregiverMobile } = req.body;
+  const { tempToken, firstName, lastName, email, gender, ageGroup, pincode, mandal, ward, colony, voterIdNumber, password, isCaregiverSignup, caregiverName, caregiverMobile } = req.body;
   let decoded;
   try {
     decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
@@ -75,17 +75,28 @@ const register = asyncHandler(async (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid token type' });
   }
 
+  // First/last name, ward, area and pincode identify who is reporting and route
+  // tickets to the right local team — required. Voter ID is a lighter-weight,
+  // legally safer identity signal than Aadhaar (see migrate_v4.js) and stays optional.
+  if (!firstName?.trim() || !lastName?.trim()) {
+    return res.status(400).json({ success: false, message: 'First and last name are required' });
+  }
+  if (!pincode?.trim() || !ward?.trim() || !colony?.trim()) {
+    return res.status(400).json({ success: false, message: 'Pincode, ward and area/colony are required' });
+  }
+
   const existing = await query('SELECT id FROM users WHERE mobile=$1', [decoded.mobile]);
   if (existing.rows.length) {
     return res.status(409).json({ success: false, message: 'User already registered' });
   }
 
+  const fullName = `${firstName.trim()} ${lastName.trim()}`;
   const passwordHash = password ? await bcrypt.hash(password, 12) : null;
   const result = await query(
-    `INSERT INTO users (id, full_name, mobile, email, gender, age_group, pincode, mandal, ward, colony, password_hash, is_verified, caregiver_name, caregiver_mobile)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,$12,$13) RETURNING *`,
-    [uuidv4(), fullName, decoded.mobile, email || null, gender || null, ageGroup || null,
-     pincode || null, mandal || null, ward || null, colony || null, passwordHash,
+    `INSERT INTO users (id, first_name, last_name, full_name, mobile, email, gender, age_group, pincode, mandal, ward, colony, voter_id_number, password_hash, is_verified, caregiver_name, caregiver_mobile)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,$15,$16) RETURNING *`,
+    [uuidv4(), firstName.trim(), lastName.trim(), fullName, decoded.mobile, email || null, gender || null, ageGroup || null,
+     pincode.trim(), mandal || null, ward.trim(), colony.trim(), voterIdNumber || null, passwordHash,
      isCaregiverSignup ? (caregiverName || null) : null, isCaregiverSignup ? (caregiverMobile || null) : null]
   );
   const { password_hash, ...safeUser } = result.rows[0];

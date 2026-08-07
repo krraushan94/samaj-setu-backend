@@ -27,6 +27,9 @@ const createTicket = asyncHandler(async (req, res) => {
   const { category, subCategory, title, description, latitude, longitude, locationText, priority, isAnonymous } = req.body;
   const userId = req.user.id;
 
+  if (!title?.trim()) return res.status(400).json({ success: false, message: 'Title is required' });
+  if (!locationText?.trim()) return res.status(400).json({ success: false, message: 'Location is required' });
+
   // Fetch user gender for auto-priority
   const userResult = await query('SELECT gender FROM users WHERE id=$1', [userId]);
   const gender = userResult.rows[0]?.gender?.toLowerCase();
