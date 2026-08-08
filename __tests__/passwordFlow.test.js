@@ -82,6 +82,31 @@ describe('POST /api/auth/change-password', () => {
   });
 });
 
+// ─── Admin resetting a team member's password re-arms the first-time gate ─────
+describe('PATCH /api/admin/team-members/:id', () => {
+  it("clears password_set_at when admin sets a new password, so the member is re-prompted to set their own", async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] }) // password update
+      .mockResolvedValueOnce({ rows: [] }); // field update
+    const res = await request(app).patch('/api/admin/team-members/team-uuid-2')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ newPassword: 'AdminIssuedAgain1' });
+    expect(res.status).toBe(200);
+    const passwordUpdateCall = mockQuery.mock.calls.find((c) => c[0].includes('password_hash'));
+    expect(passwordUpdateCall[0]).toMatch(/password_set_at\s*=\s*NULL/i);
+  });
+
+  it('leaves password_set_at untouched when admin only updates other fields', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // field update only — no password change
+    const res = await request(app).patch('/api/admin/team-members/team-uuid-2')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ fullName: 'Renamed Member' });
+    expect(res.status).toBe(200);
+    expect(mockQuery).toHaveBeenCalledTimes(1);
+    expect(mockQuery.mock.calls[0][0]).not.toMatch(/password_set_at/i);
+  });
+});
+
 // ─── Forgot / reset password (public, any role) ────────────────────────────────
 describe('POST /api/auth/forgot-password + /api/auth/reset-password', () => {
   it('sends an OTP for a mobile number that matches an account', async () => {

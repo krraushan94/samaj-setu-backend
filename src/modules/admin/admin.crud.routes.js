@@ -249,7 +249,10 @@ router.patch('/team-members/:id', verifyToken, requireAdmin, asyncHandler(async 
       return res.status(400).json({ success: false, message: 'Password must be at least 8 characters' });
     }
     const hash = await bcrypt.hash(newPassword, 12);
-    await query('UPDATE team_members SET password_hash=$1 WHERE id=$2', [hash, req.params.id]);
+    // Clearing password_set_at re-arms the "set your own password" gate (see
+    // auth.controller.js changePassword) — an admin-issued password is exactly
+    // the same situation as the original one, and needs the same one-time nudge.
+    await query('UPDATE team_members SET password_hash=$1, password_set_at=NULL WHERE id=$2', [hash, req.params.id]);
   }
   await query(
     'UPDATE team_members SET full_name=COALESCE($1,full_name), role=COALESCE($2,role), department_id=COALESCE($3,department_id), is_active=COALESCE($4,is_active) WHERE id=$5',
