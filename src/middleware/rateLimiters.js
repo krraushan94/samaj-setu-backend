@@ -41,4 +41,9 @@ const ticketCreateLimiter = rateLimit({
 // their password, and keeps this endpoint from being used to spam the recovery inbox.
 const passwordResetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
 
-module.exports = { otpLimiter, loginLimiter, ticketCreateLimiter, passwordResetLimiter };
+// Same idea, separate budget — the universal change/forgot/reset-password flow (any role)
+// shares nothing with passwordResetLimiter above, so it can't silently eat into admin's
+// or a citizen's own recovery budget just because more people are using the app.
+const universalPasswordResetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+
+module.exports = { otpLimiter, loginLimiter, ticketCreateLimiter, passwordResetLimiter, universalPasswordResetLimiter };

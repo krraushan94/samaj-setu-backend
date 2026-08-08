@@ -64,6 +64,7 @@ async function startServer() {
       await require('./db/migrate_v6')();
       await require('./db/migrate_v7')();
       await require('./db/migrate_v8')();
+      await require('./db/migrate_v9')();
       await require('./db/seed')();
     }
   } catch (err) {

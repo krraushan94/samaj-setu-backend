@@ -60,7 +60,7 @@ const MAX_TOTAL_ADMINS = 6;
 // department is capped tighter since it maps to a single real-world team.
 const UNCAPPED_MEMBERS_DEPARTMENT = 'Others';
 const MAX_TEAM_LEADERS_OTHERS  = 5;
-const MAX_TEAM_LEADERS_DEFAULT = 2;
+const MAX_TEAM_LEADERS_DEFAULT = 3;
 const MAX_TEAM_MEMBERS_DEFAULT = 20;
 
 module.exports = {

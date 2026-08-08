@@ -48,7 +48,7 @@ require.cache[require.resolve(dbModulePath)] = {
 };
 
 async function migrateAll() {
-  const files = ['migrate', 'migrate_v2', 'migrate_v3', 'migrate_v4', 'migrate_v5', 'migrate_v6', 'migrate_v7', 'migrate_v8'];
+  const files = ['migrate', 'migrate_v2', 'migrate_v3', 'migrate_v4', 'migrate_v5', 'migrate_v6', 'migrate_v7', 'migrate_v8', 'migrate_v9'];
   for (const f of files) {
     await require(path.join(__dirname, `../src/db/${f}.js`))();
     if (f === 'migrate_v7') {

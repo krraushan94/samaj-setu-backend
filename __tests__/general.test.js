@@ -160,14 +160,14 @@ describe('Departments', () => {
     expect(res.status).toBe(201);
   });
 
-  it('rejects adding a 3rd team leader to a standard department (cap of 2)', async () => {
+  it('rejects adding a 4th team leader to a standard department (cap of 3)', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ name: 'Social Welfare' }] }) // department lookup
-      .mockResolvedValueOnce({ rows: [{ count: '2' }] });             // already at cap
+      .mockResolvedValueOnce({ rows: [{ count: '3' }] });             // already at cap
     const res = await request(app)
       .post('/api/departments/dept-uuid-1/members')
       .set('Authorization', `Bearer ${adminToken()}`)
-      .send({ fullName: 'Third Leader', username: 'third_leader', password: 'SecurePass@123', role: 'leader' });
+      .send({ fullName: 'Fourth Leader', username: 'fourth_leader', password: 'SecurePass@123', role: 'leader' });
     expect(res.status).toBe(403);
   });
 

@@ -254,6 +254,197 @@ const resetAdminPassword = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Password reset successfully. Please log in with your new password.' });
 });
 
+// Change password while logged in (any role) — requires knowing the current
+// password. Team leaders/members were only ever given a username+password by
+// whoever created them, with no email/mobile on file, so the FIRST time one of
+// them changes it, email + mobile become mandatory here and get saved — that's
+// what lets forgotPassword/confirmPasswordReset below work for them afterward.
+const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword, email, mobile } = req.body;
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 8 characters' });
+  }
+  const { role } = req.user;
+
+  if (role === 'citizen') {
+    const result = await query('SELECT id, password_hash FROM users WHERE id=$1', [req.user.id]);
+    const user = result.rows[0];
+    if (!user?.password_hash || !(await bcrypt.compare(currentPassword || '', user.password_hash))) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+    const hash = await bcrypt.hash(newPassword, 12);
+    await query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, user.id]);
+    return res.json({ success: true, message: 'Password updated' });
+  }
+
+  if (role === 'leader' || role === 'member') {
+    const result = await query('SELECT * FROM team_members WHERE id=$1', [req.user.id]);
+    const member = result.rows[0];
+    if (!member || !(await bcrypt.compare(currentPassword || '', member.password_hash))) {
+      return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+    }
+    const hash = await bcrypt.hash(newPassword, 12);
+    if (!member.password_set_at) {
+      const trimmedEmail = email?.trim();
+      const trimmedMobile = mobile?.trim();
+      if (!trimmedEmail || !/^\S+@\S+\.\S+$/.test(trimmedEmail)) {
+        return res.status(400).json({ success: false, message: 'A valid email is required the first time you change your password' });
+      }
+      if (!trimmedMobile || !/^\d{10}$/.test(trimmedMobile)) {
+        return res.status(400).json({ success: false, message: 'A valid 10-digit mobile number is required the first time you change your password' });
+      }
+      await query(
+        'UPDATE team_members SET password_hash=$1, email=$2, mobile=$3, password_set_at=NOW() WHERE id=$4',
+        [hash, trimmedEmail, trimmedMobile, member.id]
+      );
+      return res.json({ success: true, message: 'Password and contact details saved' });
+    }
+    await query('UPDATE team_members SET password_hash=$1 WHERE id=$2', [hash, member.id]);
+    return res.json({ success: true, message: 'Password updated' });
+  }
+
+  if (role === 'admin') {
+    const result = await query('SELECT * FROM admin_users WHERE username=$1', [req.user.username]);
+    const admin = result.rows[0];
+    if (admin) {
+      if (!(await bcrypt.compare(currentPassword || '', admin.password_hash))) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      }
+      const hash = await bcrypt.hash(newPassword, 12);
+      await query('UPDATE admin_users SET password_hash=$1, updated_at=NOW() WHERE username=$2', [hash, req.user.username]);
+      return res.json({ success: true, message: 'Password updated' });
+    }
+    // No DB row yet (pre-bootstrap edge case) — fall back to the env hash, same as login's admin branch
+    if (req.user.username === ADMIN_USERNAME && process.env.ADMIN_PASSWORD_HASH) {
+      if (!(await bcrypt.compare(currentPassword || '', process.env.ADMIN_PASSWORD_HASH))) {
+        return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+      }
+      const hash = await bcrypt.hash(newPassword, 12);
+      await query(
+        `INSERT INTO admin_users (username, full_name, email, password_hash, created_by) VALUES ($1,'Raushan Kumar',$2,$3,'system')
+         ON CONFLICT (username) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+        [ADMIN_USERNAME, process.env.ADMIN_EMAIL || 'sihsraushandc@gmail.com', hash]
+      );
+      return res.json({ success: true, message: 'Password updated' });
+    }
+    return res.status(404).json({ success: false, message: 'Admin account not found' });
+  }
+
+  res.status(403).json({ success: false, message: 'Unsupported account type' });
+});
+
+// Forgot password (any role) — identifier is either a mobile number or an email
+// address, auto-detected. Reuses the same OTP-via-SMS path as registration for
+// a mobile, and a bcrypt-hashed emailed code (same pattern as forgotAdminPassword)
+// for an email. Always responds generically so this can't be used to probe which
+// mobiles/emails have accounts — and for a mobile, an SMS is only ever sent when
+// it actually matches an account, unlike /auth/send-otp (used for brand-new
+// registration, where no account exists yet to check against).
+const requestPasswordReset = asyncHandler(async (req, res) => {
+  const value = (req.body.identifier || '').trim();
+  const isMobile = /^\d{10}$/.test(value);
+  const isEmail = /^\S+@\S+\.\S+$/.test(value);
+  if (!isMobile && !isEmail) {
+    return res.status(400).json({ success: false, message: 'Enter a valid 10-digit mobile number or email address' });
+  }
+
+  if (isMobile) {
+    const [citizen, member] = await Promise.all([
+      query('SELECT id FROM users WHERE mobile=$1', [value]),
+      query('SELECT id FROM team_members WHERE mobile=$1', [value]),
+    ]);
+    if (citizen.rows.length || member.rows.length) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otpHash = await bcrypt.hash(otp, 10);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+      await query('INSERT INTO otp_verifications (id, mobile, otp_hash, expires_at) VALUES ($1,$2,$3,$4)', [uuidv4(), value, otpHash, expiresAt]);
+      await sendOtpSms(value, otp);
+    }
+  } else {
+    const [citizen, member, admin] = await Promise.all([
+      query('SELECT id FROM users WHERE email=$1', [value]),
+      query('SELECT id FROM team_members WHERE email=$1', [value]),
+      query('SELECT username FROM admin_users WHERE email=$1', [value]),
+    ]);
+    if (citizen.rows.length || member.rows.length || admin.rows.length) {
+      const code = Math.floor(100000 + Math.random() * 900000).toString();
+      const codeHash = await bcrypt.hash(code, 10);
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      await query('INSERT INTO password_resets (id, email, code_hash, expires_at) VALUES ($1,$2,$3,$4)', [uuidv4(), value, codeHash, expiresAt]);
+      await sendMail({
+        to: value, subject: 'Samaj Setu — password reset code',
+        text: `Your password reset code is ${code}. It expires in 15 minutes. If you didn't request this, ignore this email.`,
+      });
+    }
+  }
+
+  res.json({ success: true, message: 'If that account exists, a reset code has been sent.' });
+});
+
+// Confirm forgot-password (any role) — verifies the OTP (mobile) or emailed code
+// (email), then finds and updates whichever account actually matches: citizen,
+// team member, or admin. A team member resetting this way counts as their
+// first password change too (password_set_at gets stamped) if it wasn't already.
+const confirmPasswordReset = asyncHandler(async (req, res) => {
+  const value = (req.body.identifier || '').trim();
+  const { code, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ success: false, message: 'New password must be at least 8 characters' });
+  }
+  const isMobile = /^\d{10}$/.test(value);
+
+  let record;
+  if (isMobile) {
+    const result = await query(
+      'SELECT * FROM otp_verifications WHERE mobile=$1 AND used=FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
+      [value]
+    );
+    record = result.rows[0];
+    if (!record || !(await bcrypt.compare(code || '', record.otp_hash))) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired code' });
+    }
+    await query('UPDATE otp_verifications SET used=TRUE WHERE id=$1', [record.id]);
+  } else {
+    const result = await query(
+      'SELECT * FROM password_resets WHERE email=$1 AND used=FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
+      [value]
+    );
+    record = result.rows[0];
+    if (!record || !(await bcrypt.compare(code || '', record.code_hash))) {
+      return res.status(400).json({ success: false, message: 'Invalid or expired code' });
+    }
+    await query('UPDATE password_resets SET used=TRUE WHERE id=$1', [record.id]);
+  }
+
+  const hash = await bcrypt.hash(newPassword, 12);
+  const column = isMobile ? 'mobile' : 'email'; // hardcoded to one of these two literals only — never user input
+
+  const citizen = await query(`SELECT id FROM users WHERE ${column}=$1`, [value]);
+  if (citizen.rows.length) {
+    await query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, citizen.rows[0].id]);
+    const tokens = generateTokens({ id: citizen.rows[0].id, role: 'citizen', mobile: isMobile ? value : undefined });
+    return res.json({ success: true, role: 'citizen', ...tokens });
+  }
+
+  const member = await query(`SELECT * FROM team_members WHERE ${column}=$1`, [value]);
+  if (member.rows.length) {
+    await query('UPDATE team_members SET password_hash=$1, password_set_at=NOW() WHERE id=$2', [hash, member.rows[0].id]);
+    const tokens = generateTokens({ id: member.rows[0].id, role: member.rows[0].role, departmentId: member.rows[0].department_id, username: member.rows[0].username });
+    return res.json({ success: true, role: member.rows[0].role, ...tokens });
+  }
+
+  if (!isMobile) {
+    const admin = await query('SELECT username FROM admin_users WHERE email=$1', [value]);
+    if (admin.rows.length) {
+      await query('UPDATE admin_users SET password_hash=$1, updated_at=NOW() WHERE username=$2', [hash, admin.rows[0].username]);
+      const tokens = generateTokens({ id: admin.rows[0].username, role: 'admin', username: admin.rows[0].username });
+      return res.json({ success: true, role: 'admin', ...tokens });
+    }
+  }
+
+  res.status(404).json({ success: false, message: 'No account found for that mobile number or email' });
+});
+
 // Refresh JWT
 const refresh = asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
@@ -267,4 +458,7 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword, resetCitizenPassword };
+module.exports = {
+  sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword, resetCitizenPassword,
+  changePassword, requestPasswordReset, confirmPasswordReset,
+};
