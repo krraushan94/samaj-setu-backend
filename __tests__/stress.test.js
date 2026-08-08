@@ -75,6 +75,7 @@ describe('STRESS TEST — 20 Dummy Users, All Categories, All Flows', () => {
           tempToken: verifyRes.body.tempToken,
           firstName, lastName: rest.join(' ') || firstName, mobile: user.mobile,
           gender: user.gender, pincode: user.pincode, mandal: user.mandal, ward: user.ward, colony: user.colony,
+          password: 'SecurePass123', voterIdNumber: 'ABC1234567',
         });
         expect(regRes.status).toBe(201);
         expect(regRes.body.accessToken).toBeDefined();

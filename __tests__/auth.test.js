@@ -42,17 +42,18 @@ describe('POST /api/auth/send-otp', () => {
 
 // ─── OTP Verify ───────────────────────────────────────────────────────────────
 describe('POST /api/auth/verify-otp', () => {
-  it('returns isNewUser=false and tokens for existing user', async () => {
+  it('returns isNewUser=false and NO tokens for an already-registered mobile (OTP is one-time, not a login method)', async () => {
     const otpHash = await bcrypt.hash('123456', 10);
     const futureDate = new Date(Date.now() + 600000);
     mockQuery
       .mockResolvedValueOnce({ rows: [{ id: 'otp-id', otp_hash: otpHash, expires_at: futureDate, used: false }] })
       .mockResolvedValueOnce({ rows: [] }) // mark used
-      .mockResolvedValueOnce({ rows: [mockUser] }); // find user
+      .mockResolvedValueOnce({ rows: [{ id: mockUser.id }] }); // find user
     const res = await request(app).post('/api/auth/verify-otp').send({ mobile: '9999900000', otp: '123456' });
     expect(res.status).toBe(200);
     expect(res.body.isNewUser).toBe(false);
-    expect(res.body.accessToken).toBeDefined();
+    expect(res.body.alreadyRegistered).toBe(true);
+    expect(res.body.accessToken).toBeUndefined();
   });
 
   it('returns isNewUser=true and tempToken for new user', async () => {
@@ -81,6 +82,67 @@ describe('POST /api/auth/verify-otp', () => {
     const res = await request(app).post('/api/auth/verify-otp').send({ mobile: '9999900000', otp: '999999' });
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/invalid otp/i);
+  });
+});
+
+// ─── Registration validation ────────────────────────────────────────────────────
+describe('POST /api/auth/register — validation', () => {
+  const jwt = require('jsonwebtoken');
+  const tempToken = () => jwt.sign({ mobile: '9999911111', role: 'pending' }, process.env.JWT_SECRET, { expiresIn: '30m' });
+  const validBody = () => ({
+    tempToken: tempToken(), firstName: 'Test', lastName: 'User', pincode: '700157',
+    ward: '5', colony: 'Hatiara', password: 'SecurePass123', voterIdNumber: 'ABC1234567',
+  });
+
+  it('rejects registration with no password', async () => {
+    const res = await request(app).post('/api/auth/register').send({ ...validBody(), password: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/password/i);
+  });
+
+  it('rejects registration with neither Aadhaar nor Voter ID', async () => {
+    const res = await request(app).post('/api/auth/register').send({ ...validBody(), voterIdNumber: '' });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/aadhaar|voter/i);
+  });
+
+  it('accepts registration with Aadhaar number instead of Voter ID', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [] }) // no existing user
+      .mockResolvedValueOnce({ rows: [{ id: 'new-user', mobile: '9999911111' }] }); // insert returns user
+    const res = await request(app).post('/api/auth/register').send({ ...validBody(), voterIdNumber: '', aadharNumber: '123456789012' });
+    expect(res.status).toBe(201);
+    expect(res.body.accessToken).toBeDefined();
+  });
+});
+
+// ─── Citizen Password Reset ────────────────────────────────────────────────────
+describe('POST /api/auth/citizen/reset-password', () => {
+  it('resets password and returns tokens for a valid OTP', async () => {
+    const otpHash = await bcrypt.hash('123456', 10);
+    const futureDate = new Date(Date.now() + 600000);
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'otp-id', otp_hash: otpHash, expires_at: futureDate, used: false }] })
+      .mockResolvedValueOnce({ rows: [] }) // mark used
+      .mockResolvedValueOnce({ rows: [mockUser] }) // find user
+      .mockResolvedValueOnce({ rows: [] }); // update password
+    const res = await request(app).post('/api/auth/citizen/reset-password')
+      .send({ mobile: '9999900000', otp: '123456', newPassword: 'NewSecurePass123' });
+    expect(res.status).toBe(200);
+    expect(res.body.accessToken).toBeDefined();
+  });
+
+  it('rejects a short new password', async () => {
+    const res = await request(app).post('/api/auth/citizen/reset-password')
+      .send({ mobile: '9999900000', otp: '123456', newPassword: 'short' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for expired/missing OTP', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/auth/citizen/reset-password')
+      .send({ mobile: '9999900000', otp: '000000', newPassword: 'NewSecurePass123' });
+    expect(res.status).toBe(400);
   });
 });
 

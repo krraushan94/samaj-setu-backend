@@ -49,13 +49,16 @@ const verifyOtp = asyncHandler(async (req, res) => {
   await query('UPDATE otp_verifications SET used=TRUE WHERE id=$1', [record.id]);
 
   // Check if user already exists
-  const userResult = await query('SELECT * FROM users WHERE mobile=$1', [mobile]);
+  const userResult = await query('SELECT id FROM users WHERE mobile=$1', [mobile]);
   const user = userResult.rows[0];
 
   if (user) {
-    const { password_hash, ...safeUser } = user;
-    const tokens = generateTokens({ id: user.id, role: 'citizen', mobile: user.mobile });
-    return res.json({ success: true, isNewUser: false, ...tokens, user: safeUser });
+    // OTP is a one-time registration step, not a repeat login method — an
+    // already-registered mobile does NOT get logged in here (that used to
+    // silently bypass the password entirely, burning an SMS on every login).
+    // Returning users log in with username/mobile + password; if they forgot
+    // it, /auth/citizen/reset-password is the (also OTP-gated, but rare) path back in.
+    return res.json({ success: true, isNewUser: false, alreadyRegistered: true });
   }
   // New user — return temp token for registration completion
   const tempToken = jwt.sign({ mobile, role: 'pending' }, process.env.JWT_SECRET, { expiresIn: '30m' });
@@ -64,7 +67,7 @@ const verifyOtp = asyncHandler(async (req, res) => {
 
 // Complete registration
 const register = asyncHandler(async (req, res) => {
-  const { tempToken, firstName, lastName, email, gender, ageGroup, pincode, mandal, ward, colony, voterIdNumber, password, isCaregiverSignup, caregiverName, caregiverMobile } = req.body;
+  const { tempToken, firstName, lastName, email, gender, ageGroup, pincode, mandal, ward, colony, voterIdNumber, aadharNumber, password, isCaregiverSignup, caregiverName, caregiverMobile } = req.body;
   let decoded;
   try {
     decoded = jwt.verify(tempToken, process.env.JWT_SECRET);
@@ -76,13 +79,23 @@ const register = asyncHandler(async (req, res) => {
   }
 
   // First/last name, ward, area and pincode identify who is reporting and route
-  // tickets to the right local team — required. Voter ID is a lighter-weight,
-  // legally safer identity signal than Aadhaar (see migrate_v4.js) and stays optional.
+  // tickets to the right local team — required. A password is mandatory too:
+  // OTP is meant to be a one-time registration step, not a repeat login method
+  // (each OTP costs real SMS credit), so every account needs a way to log back
+  // in without one. At least one of Aadhaar/Voter ID is required as an
+  // identity signal (Aadhaar collection carries real legal exposure under the
+  // Aadhaar Act, 2016 — implemented per explicit request despite that caveat).
   if (!firstName?.trim() || !lastName?.trim()) {
     return res.status(400).json({ success: false, message: 'First and last name are required' });
   }
   if (!pincode?.trim() || !ward?.trim() || !colony?.trim()) {
     return res.status(400).json({ success: false, message: 'Pincode, ward and area/colony are required' });
+  }
+  if (!password || password.length < 8) {
+    return res.status(400).json({ success: false, message: 'A password of at least 8 characters is required' });
+  }
+  if (!aadharNumber?.trim() && !voterIdNumber?.trim()) {
+    return res.status(400).json({ success: false, message: 'Aadhaar number or Voter ID is required' });
   }
 
   const existing = await query('SELECT id FROM users WHERE mobile=$1', [decoded.mobile]);
@@ -91,17 +104,45 @@ const register = asyncHandler(async (req, res) => {
   }
 
   const fullName = `${firstName.trim()} ${lastName.trim()}`;
-  const passwordHash = password ? await bcrypt.hash(password, 12) : null;
+  const passwordHash = await bcrypt.hash(password, 12);
   const result = await query(
-    `INSERT INTO users (id, first_name, last_name, full_name, mobile, email, gender, age_group, pincode, mandal, ward, colony, voter_id_number, password_hash, is_verified, caregiver_name, caregiver_mobile)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,TRUE,$15,$16) RETURNING *`,
+    `INSERT INTO users (id, first_name, last_name, full_name, mobile, email, gender, age_group, pincode, mandal, ward, colony, voter_id_number, aadhar_number, password_hash, is_verified, caregiver_name, caregiver_mobile)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,TRUE,$16,$17) RETURNING *`,
     [uuidv4(), firstName.trim(), lastName.trim(), fullName, decoded.mobile, email || null, gender || null, ageGroup || null,
-     pincode.trim(), mandal || null, ward.trim(), colony.trim(), voterIdNumber || null, passwordHash,
+     pincode.trim(), mandal || null, ward.trim(), colony.trim(), voterIdNumber || null, aadharNumber || null, passwordHash,
      isCaregiverSignup ? (caregiverName || null) : null, isCaregiverSignup ? (caregiverMobile || null) : null]
   );
   const { password_hash, ...safeUser } = result.rows[0];
   const tokens = generateTokens({ id: safeUser.id, role: 'citizen', mobile: safeUser.mobile });
   res.status(201).json({ success: true, ...tokens, user: safeUser });
+});
+
+// Citizen password reset — the only place OTP is used again after initial
+// registration, and only when a citizen genuinely forgot their password.
+const resetCitizenPassword = asyncHandler(async (req, res) => {
+  const { mobile, otp, newPassword } = req.body;
+  if (!newPassword || newPassword.length < 8) {
+    return res.status(400).json({ success: false, message: 'A password of at least 8 characters is required' });
+  }
+  const result = await query(
+    'SELECT * FROM otp_verifications WHERE mobile=$1 AND used=FALSE AND expires_at > NOW() ORDER BY created_at DESC LIMIT 1',
+    [mobile]
+  );
+  if (!result.rows.length) return res.status(400).json({ success: false, message: 'OTP expired or not found' });
+  const record = result.rows[0];
+  const valid = await bcrypt.compare(otp, record.otp_hash);
+  if (!valid) return res.status(400).json({ success: false, message: 'Invalid OTP' });
+  await query('UPDATE otp_verifications SET used=TRUE WHERE id=$1', [record.id]);
+
+  const userResult = await query('SELECT * FROM users WHERE mobile=$1', [mobile]);
+  if (!userResult.rows.length) return res.status(404).json({ success: false, message: 'No account found for this mobile number' });
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  await query('UPDATE users SET password_hash=$1 WHERE mobile=$2', [passwordHash, mobile]);
+
+  const { password_hash, ...safeUser } = userResult.rows[0];
+  const tokens = generateTokens({ id: safeUser.id, role: 'citizen', mobile: safeUser.mobile });
+  res.json({ success: true, ...tokens, user: safeUser });
 });
 
 // Login (citizen password, team leader, admin)
@@ -226,4 +267,4 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
-module.exports = { sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword };
+module.exports = { sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword, resetCitizenPassword };
