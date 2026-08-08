@@ -38,7 +38,7 @@ const getDashboardStats = asyncHandler(async (req, res) => {
 const ALLOWED_TABLES = [
   'users', 'tickets', 'payments', 'media_attachments',
   'audit_logs', 'departments', 'team_members', 'notifications',
-  'app_impressions', 'ticket_history', 'events', 'missing_persons',
+  'app_impressions', 'ticket_history', 'events', 'missing_persons', 'office_visits',
 ];
 
 const browseTable = asyncHandler(async (req, res) => {

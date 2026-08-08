@@ -68,7 +68,7 @@ describe('GET /api/admin/stats', () => {
 describe('GET /api/admin/db/:table', () => {
   const VALID_TABLES = ['users', 'tickets', 'payments', 'media_attachments',
     'audit_logs', 'departments', 'team_members', 'notifications',
-    'app_impressions', 'ticket_history', 'events', 'missing_persons'];
+    'app_impressions', 'ticket_history', 'events', 'missing_persons', 'office_visits'];
 
   VALID_TABLES.forEach(table => {
     it(`Admin can browse "${table}" table`, async () => {
