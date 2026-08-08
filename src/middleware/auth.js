@@ -41,6 +41,15 @@ const requireTeamLeader = (req, res, next) => {
   next();
 };
 
+// Task/chat workspace — leaders AND members (not just leaders), plus admin.
+// Citizens never reach this; per-department scoping happens in the controller.
+const requireTeamAccess = (req, res, next) => {
+  if (!['admin', 'leader', 'member'].includes(req.user?.role)) {
+    return res.status(403).json({ success: false, message: 'Team access only' });
+  }
+  next();
+};
+
 // Cash-payment handling stays with whoever's actually taking the money — a team leader
 // (their department, their collections) or Admin_Raushan — but not a sub-admin.
 const requirePaymentAccess = (req, res, next) => {
@@ -57,4 +66,4 @@ const requireCitizen = (req, res, next) => {
   next();
 };
 
-module.exports = { verifyToken, requireAdmin, requirePrimaryAdmin, requireTeamLeader, requirePaymentAccess, requireCitizen };
+module.exports = { verifyToken, requireAdmin, requirePrimaryAdmin, requireTeamLeader, requireTeamAccess, requirePaymentAccess, requireCitizen };

@@ -17,6 +17,7 @@ const adminRoutes     = require('./modules/admin/admin.routes');
 const adminCrudRoutes = require('./modules/admin/admin.crud.routes');
 const userRoutes      = require('./modules/users/user.routes');
 const visitRoutes     = require('./modules/visits/visit.routes');
+const teamworkRoutes  = require('./modules/teamwork/teamwork.routes');
 
 const app = express();
 
@@ -45,6 +46,7 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/admin', adminCrudRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/visits', visitRoutes);
+app.use('/api/teamwork', teamworkRoutes);
 
 app.use(errorHandler);
 
@@ -61,6 +63,7 @@ async function startServer() {
       await require('./db/migrate_v5')();
       await require('./db/migrate_v6')();
       await require('./db/migrate_v7')();
+      await require('./db/migrate_v8')();
       await require('./db/seed')();
     }
   } catch (err) {
