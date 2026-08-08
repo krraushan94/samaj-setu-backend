@@ -5,6 +5,7 @@ const { query } = require('../../config/db');
 const { ADMIN_USERNAME } = require('../../config/constants');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { sendMail } = require('../../config/mailer');
+const { sendOtpSms } = require('../../config/sms');
 
 const generateTokens = (payload) => ({
   accessToken: jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }),
@@ -26,8 +27,7 @@ const sendOtp = asyncHandler(async (req, res) => {
     [uuidv4(), mobile, otpHash, expiresAt]
   );
 
-  // TODO: call MSG91 API here with otp when keys are configured
-  console.log(`[DEV] OTP for ${mobile}: ${otp}`);
+  await sendOtpSms(mobile, otp);
 
   res.json({ success: true, message: 'OTP sent successfully' });
 });
