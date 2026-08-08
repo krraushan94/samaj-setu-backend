@@ -1,6 +1,7 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const { query } = require('../../config/db');
 const { asyncHandler } = require('../../middleware/errorHandler');
+const { notifyCitizen } = require('../../utils/notify');
 
 // Citizen requests an in-person office visit
 const createVisit = asyncHandler(async (req, res) => {
@@ -69,7 +70,17 @@ const scheduleVisit = asyncHandler(async (req, res) => {
     [nextStatus, scheduledTime || null, adminNote || null, id]
   );
   if (!result.rows.length) return res.status(404).json({ success: false, message: 'Visit request not found' });
-  res.json({ success: true, visit: result.rows[0] });
+
+  const visit = result.rows[0];
+  if (visit.user_id) {
+    const messages = {
+      scheduled: `Your office visit is scheduled for ${scheduledTime}.${adminNote ? ` Note: ${adminNote}` : ''}`,
+      cancelled: `Your office visit request was cancelled.${adminNote ? ` Note: ${adminNote}` : ''}`,
+      completed: 'Your office visit has been marked completed. Thank you for visiting.',
+    };
+    await notifyCitizen(visit.user_id, 'Office visit update', messages[nextStatus], 'office_visit');
+  }
+  res.json({ success: true, visit });
 });
 
 module.exports = { createVisit, myVisits, cancelVisit, listVisits, scheduleVisit };

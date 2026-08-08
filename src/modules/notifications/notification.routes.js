@@ -6,18 +6,23 @@ const { randomUUID: uuidv4 } = require('crypto');
 
 const router = Router();
 
-// Get user's notifications
+// Get user's notifications — citizens and team members (leader/member) are recorded
+// under different recipient_role buckets since notifications.user_id can point at
+// either the users or team_members table (no shared FK — see migrate_v7.js)
+const recipientRole = (role) => (role === 'leader' || role === 'member') ? 'team_member' : 'citizen';
+
 router.get('/', verifyToken, asyncHandler(async (req, res) => {
   const result = await query(
-    'SELECT * FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50',
-    [req.user.id]
+    'SELECT * FROM notifications WHERE user_id=$1 AND recipient_role=$2 ORDER BY created_at DESC LIMIT 50',
+    [req.user.id, recipientRole(req.user.role)]
   );
   res.json({ success: true, notifications: result.rows });
 }));
 
 // Mark as read
 router.patch('/:id/read', verifyToken, asyncHandler(async (req, res) => {
-  await query('UPDATE notifications SET is_read=TRUE WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+  await query('UPDATE notifications SET is_read=TRUE WHERE id=$1 AND user_id=$2 AND recipient_role=$3',
+    [req.params.id, req.user.id, recipientRole(req.user.role)]);
   res.json({ success: true });
 }));
 

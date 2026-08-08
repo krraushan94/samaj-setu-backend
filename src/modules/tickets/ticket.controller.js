@@ -3,6 +3,7 @@ const { query } = require('../../config/db');
 const { CATEGORY_DEPARTMENT_MAP, PAYMENT_EXEMPT_GROUPS, PAYMENT_EXEMPT_SUBCATEGORY_LABELS } = require('../../config/constants');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { needsModerationReview } = require('../../utils/moderation');
+const { notifyCitizen, notifyTeamMember, notifyDepartment } = require('../../utils/notify');
 
 // Generate ticket number: SJT-2026-XXXXX
 const genTicketNumber = () => `SJT-${new Date().getFullYear()}-${Math.random().toString(36).toUpperCase().slice(2, 7)}`;
@@ -142,7 +143,7 @@ const updateStatus = asyncHandler(async (req, res) => {
   const { status, note, resolutionPhoto } = req.body;
   const { id } = req.params;
 
-  const current = await query('SELECT status, department_id FROM tickets WHERE id=$1', [id]);
+  const current = await query('SELECT status, department_id, user_id, ticket_number FROM tickets WHERE id=$1', [id]);
   if (!current.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
   // Team leaders can only update tickets in their department
@@ -157,6 +158,12 @@ const updateStatus = asyncHandler(async (req, res) => {
   await query(
     'INSERT INTO ticket_history (id, ticket_id, changed_by, role, old_status, new_status, note) VALUES ($1,$2,$3,$4,$5,$6,$7)',
     [uuidv4(), id, req.user.username || req.user.id, req.user.role, current.rows[0].status, status, note || null]
+  );
+  await notifyCitizen(
+    current.rows[0].user_id,
+    `Ticket ${current.rows[0].ticket_number} updated`,
+    `Your ticket status is now "${status}".${note ? ` Note: ${note}` : ''}`,
+    'ticket_status',
   );
   res.json({ success: true, message: 'Status updated' });
 });
@@ -196,7 +203,7 @@ const assignTicket = asyncHandler(async (req, res) => {
   const { assignedTo, departmentId } = req.body;
   const { id } = req.params;
 
-  const current = await query('SELECT department_id FROM tickets WHERE id=$1', [id]);
+  const current = await query('SELECT department_id, ticket_number FROM tickets WHERE id=$1', [id]);
   if (!current.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
   // Team leaders can only assign within their own department, and can't move a ticket
@@ -214,6 +221,9 @@ const assignTicket = asyncHandler(async (req, res) => {
     'UPDATE tickets SET assigned_to=$1, department_id=COALESCE($2, department_id), updated_at=NOW() WHERE id=$3',
     [assignedTo || null, departmentId || null, id]
   );
+  if (assignedTo) {
+    await notifyTeamMember(assignedTo, 'New ticket assigned', `Ticket ${current.rows[0].ticket_number} has been assigned to you.`, 'ticket_assigned');
+  }
   res.json({ success: true, message: 'Ticket assigned' });
 });
 
@@ -261,6 +271,13 @@ const sosTicket = asyncHandler(async (req, res) => {
   await query(
     'INSERT INTO audit_logs (id, actor_id, actor_role, action, entity, entity_id, ip_address) VALUES ($1,$2,$3,$4,$5,$6,$7)',
     [uuidv4(), userId, 'citizen', 'sos_triggered', 'tickets', ticketId, req.ip]
+  );
+
+  await notifyDepartment(
+    departmentId,
+    '🚨 SOS Emergency',
+    `${user?.full_name || 'A citizen'} triggered an SOS at ${locationText || 'an unknown location'}. Ticket ${ticketNumber}.`,
+    'sos',
   );
 
   res.status(201).json({ success: true, ticketId, ticketNumber, message: 'SOS alert sent — the Social Welfare team has been notified. Help is on the way.' });

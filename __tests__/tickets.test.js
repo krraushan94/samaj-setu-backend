@@ -68,13 +68,35 @@ describe('POST /api/tickets', () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ full_name: 'Test User', gender: 'female' }] })
       .mockResolvedValueOnce({ rows: [{ id: 'dept-uuid-1' }] })
-      .mockResolvedValueOnce({ rows: [] });
+      .mockResolvedValueOnce({ rows: [] })   // insert ticket
+      .mockResolvedValueOnce({ rows: [] })   // audit log
+      .mockResolvedValueOnce({ rows: [] });  // notifyDepartment: no team members found, nothing to notify
     const res = await request(app)
       .post('/api/tickets/sos')
       .set('Authorization', `Bearer ${citizenToken()}`)
       .send({ latitude: 22.5726, longitude: 88.3639, locationText: 'Hatiara main road' });
     expect(res.status).toBe(201);
     expect(res.body.ticketNumber).toMatch(/^SJT-/);
+  });
+
+  it('SOS notifies every active team member of the routed department', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ full_name: 'Test User', gender: 'female' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-uuid-1' }] })
+      .mockResolvedValueOnce({ rows: [] })   // insert ticket
+      .mockResolvedValueOnce({ rows: [] })   // audit log
+      .mockResolvedValueOnce({ rows: [{ id: 'team-uuid-1' }, { id: 'team-uuid-2' }] }) // active team members
+      .mockResolvedValueOnce({ rows: [] })   // notification insert for team-uuid-1
+      .mockResolvedValueOnce({ rows: [] });  // notification insert for team-uuid-2
+    const res = await request(app)
+      .post('/api/tickets/sos')
+      .set('Authorization', `Bearer ${citizenToken()}`)
+      .send({ latitude: 22.5726, longitude: 88.3639, locationText: 'Hatiara main road' });
+    expect(res.status).toBe(201);
+    const notifyInserts = mockQuery.mock.calls.filter(c => c[0].includes('INSERT INTO notifications'));
+    expect(notifyInserts).toHaveLength(2);
+    expect(notifyInserts[0][1]).toEqual(expect.arrayContaining(['team-uuid-1', 'team_member']));
+    expect(notifyInserts[1][1]).toEqual(expect.arrayContaining(['team-uuid-2', 'team_member']));
   });
 });
 
@@ -164,6 +186,51 @@ describe('PATCH /api/tickets/:id/status', () => {
       .set('Authorization', `Bearer ${leaderToken()}`)
       .send({ status: 'resolved' });
     expect(res.status).toBe(404);
+  });
+
+  it('notifies the citizen who owns the ticket when its status changes', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ status: 'open', department_id: 'dept-uuid-1', user_id: 'user-uuid-1', ticket_number: 'SJT-2026-ABCDE' }] })
+      .mockResolvedValueOnce({ rows: [] })  // update ticket
+      .mockResolvedValueOnce({ rows: [] })  // insert history
+      .mockResolvedValueOnce({ rows: [] }); // notification insert
+    const res = await request(app)
+      .patch('/api/tickets/ticket-uuid-1/status')
+      .set('Authorization', `Bearer ${leaderToken()}`)
+      .send({ status: 'resolved', note: 'Fixed the streetlight' });
+    expect(res.status).toBe(200);
+    const notifyInsert = mockQuery.mock.calls.find(c => c[0].includes('INSERT INTO notifications'));
+    expect(notifyInsert[1]).toEqual(expect.arrayContaining(['user-uuid-1', 'citizen']));
+  });
+});
+
+// ─── Assign ────────────────────────────────────────────────────────────────────
+describe('PATCH /api/tickets/:id/assign', () => {
+  it('notifies the assigned team member', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ department_id: 'dept-uuid-1', ticket_number: 'SJT-2026-ABCDE' }] })
+      .mockResolvedValueOnce({ rows: [] })  // update ticket
+      .mockResolvedValueOnce({ rows: [] }); // notification insert
+    const res = await request(app)
+      .patch('/api/tickets/ticket-uuid-1/assign')
+      .set('Authorization', `Bearer ${leaderToken()}`)
+      .send({ assignedTo: 'team-uuid-2' });
+    expect(res.status).toBe(200);
+    const notifyInsert = mockQuery.mock.calls.find(c => c[0].includes('INSERT INTO notifications'));
+    expect(notifyInsert[1]).toEqual(expect.arrayContaining(['team-uuid-2', 'team_member']));
+  });
+
+  it('does not attempt to notify when unassigning (assignedTo empty)', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ department_id: 'dept-uuid-1', ticket_number: 'SJT-2026-ABCDE' }] })
+      .mockResolvedValueOnce({ rows: [] }); // update ticket
+    const res = await request(app)
+      .patch('/api/tickets/ticket-uuid-1/assign')
+      .set('Authorization', `Bearer ${leaderToken()}`)
+      .send({ assignedTo: '' });
+    expect(res.status).toBe(200);
+    const notifyInsert = mockQuery.mock.calls.find(c => c[0].includes('INSERT INTO notifications'));
+    expect(notifyInsert).toBeUndefined();
   });
 });
 

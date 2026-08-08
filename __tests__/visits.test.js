@@ -127,4 +127,15 @@ describe('PATCH /api/visits/:id/schedule', () => {
       .set('Authorization', `Bearer ${adminToken()}`).send({ scheduledTime: 'Mon 10am' });
     expect(res.status).toBe(404);
   });
+
+  it('notifies the citizen who requested the visit once scheduled', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ id: 'visit-1', user_id: 'user-uuid-1', status: 'scheduled', scheduled_time: 'Mon 10am' }] })
+      .mockResolvedValueOnce({ rows: [] }); // notification insert
+    const res = await request(app).patch('/api/visits/visit-1/schedule')
+      .set('Authorization', `Bearer ${adminToken()}`).send({ scheduledTime: 'Mon 10am' });
+    expect(res.status).toBe(200);
+    const notifyInsert = mockQuery.mock.calls.find(c => c[0].includes('INSERT INTO notifications'));
+    expect(notifyInsert[1]).toEqual(expect.arrayContaining(['user-uuid-1', 'citizen']));
+  });
 });
