@@ -12,7 +12,11 @@ const generateTokens = (payload) => ({
   refreshToken: jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' }),
 });
 
-// Send OTP — stores hashed OTP; in production, calls MSG91
+// Send OTP — stores hashed OTP, then relays it via Fast2SMS. This is a brand-new
+// registration step (no existing account to protect the privacy of), so unlike
+// the forgot-password flows below, a genuine delivery failure is reported back
+// to the caller directly rather than swallowed — silently saying "sent" when it
+// wasn't just leaves the citizen stuck on the next screen with no code to enter.
 const sendOtp = asyncHandler(async (req, res) => {
   const { mobile } = req.body;
   if (!mobile || !/^\d{10}$/.test(mobile)) {
@@ -27,7 +31,14 @@ const sendOtp = asyncHandler(async (req, res) => {
     [uuidv4(), mobile, otpHash, expiresAt]
   );
 
-  await sendOtpSms(mobile, otp);
+  const { delivered, reason } = await sendOtpSms(mobile, otp);
+  // In production, "not configured" is itself a failure worth surfacing loudly rather
+  // than silently pretending to succeed — that's exactly how this went unnoticed before.
+  // Locally, with no Fast2SMS credentials at all, the console-logged OTP fallback is fine.
+  const shouldFail = !delivered && (reason !== 'not_configured' || process.env.NODE_ENV === 'production');
+  if (shouldFail) {
+    return res.status(502).json({ success: false, message: 'Could not send the OTP right now. Please try again in a moment.' });
+  }
 
   res.json({ success: true, message: 'OTP sent successfully' });
 });

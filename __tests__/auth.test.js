@@ -3,12 +3,18 @@ const bcrypt = require('bcryptjs');
 const request = require('supertest');
 
 jest.mock('../src/config/db', () => require('./helpers/dbMock').dbMockFactory());
+jest.mock('../src/config/sms', () => ({ sendOtpSms: jest.fn().mockResolvedValue({ delivered: false, reason: 'not_configured' }) }));
 
 // Must load app AFTER mocks are set up
 const app = require('../src/app');
+const { sendOtpSms } = require('../src/config/sms');
 const { citizenToken, adminToken, leaderToken, mockUser } = require('./helpers/fixtures');
 
-beforeEach(() => mockQuery.mockReset());
+beforeEach(() => {
+  mockQuery.mockReset();
+  sendOtpSms.mockClear();
+  sendOtpSms.mockResolvedValue({ delivered: false, reason: 'not_configured' });
+});
 
 // ─── OTP Send ─────────────────────────────────────────────────────────────────
 describe('POST /api/auth/send-otp', () => {
@@ -37,6 +43,24 @@ describe('POST /api/auth/send-otp', () => {
   it('returns 400 for 11-digit mobile', async () => {
     const res = await request(app).post('/api/auth/send-otp').send({ mobile: '98765432101' });
     expect(res.status).toBe(400);
+  });
+
+  it("returns 502 (not a false 'success') when Fast2SMS genuinely fails to deliver", async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    sendOtpSms.mockResolvedValue({ delivered: false, reason: 'provider_error' });
+    const res = await request(app).post('/api/auth/send-otp').send({ mobile: '9876543210' });
+    expect(res.status).toBe(502);
+    expect(res.body.success).toBe(false);
+  });
+
+  it('treats missing Fast2SMS credentials as a failure in production too, not a silent no-op success', async () => {
+    const originalEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+    mockQuery.mockResolvedValue({ rows: [] });
+    sendOtpSms.mockResolvedValue({ delivered: false, reason: 'not_configured' });
+    const res = await request(app).post('/api/auth/send-otp').send({ mobile: '9876543210' });
+    process.env.NODE_ENV = originalEnv;
+    expect(res.status).toBe(502);
   });
 });
 
