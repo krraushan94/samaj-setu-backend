@@ -100,6 +100,95 @@ describe('POST /api/tickets', () => {
   });
 });
 
+// ─── BMS Labour Details ────────────────────────────────────────────────────────
+describe('POST /api/tickets — BMS labour details', () => {
+  const labourPayload = (overrides = {}) => ({
+    category: 'labour', subCategory: 'Domestic Worker / Maid – Salary Delayed or Not Paid',
+    title: 'Salary not paid for two months', description: 'Employer stopped paying since June',
+    locationText: 'Hatiara Colony',
+    labourDetails: {
+      fullName: 'Sunita Roy', organisationName: 'Sharma Household',
+      aadharNumber: '123456789012', ...overrides,
+    },
+  });
+
+  it('rejects a labour ticket with no worker full name', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ fullName: '' }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/full name/i);
+  });
+
+  it('rejects a labour ticket with no organisation name', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ organisationName: '' }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/organisation/i);
+  });
+
+  it('rejects a labour ticket with neither Aadhaar nor Voter ID', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ aadharNumber: '' }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/aadhaar|voter/i);
+  });
+
+  it('rejects a labour ticket with a malformed Aadhaar number', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ aadharNumber: '12345' }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/12 digits/i);
+  });
+
+  it('rejects a labour ticket with a malformed Voter ID', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ aadharNumber: '', voterIdNumber: 'not-a-real-epic' }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/voter id/i);
+  });
+
+  it('accepts a Voter ID in place of Aadhaar', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'female' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-bms' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ aadharNumber: '', voterIdNumber: 'ABC1234567' }));
+    expect(res.status).toBe(201);
+  });
+
+  it('creates a valid labour ticket and persists only the known labour_details fields as JSON', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'female' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-bms' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ sector: 'unorganized', extraHackerField: 'should be dropped' }));
+    expect(res.status).toBe(201);
+
+    const insertCall = mockQuery.mock.calls.find((c) => c[0].includes('INSERT INTO tickets'));
+    const labourDetailsJson = insertCall[1][15];
+    const stored = JSON.parse(labourDetailsJson);
+    expect(stored.fullName).toBe('Sunita Roy');
+    expect(stored.organisationName).toBe('Sharma Household');
+    expect(stored.sector).toBe('unorganized');
+    expect(stored.extraHackerField).toBeUndefined();
+  });
+
+  it('does not require labourDetails for non-labour categories', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-uuid-1' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send({ category: 'infrastructure', subCategory: 'street_light', title: 'Light broken', locationText: 'Ward 5' });
+    expect(res.status).toBe(201);
+  });
+});
+
 // ─── List Tickets ──────────────────────────────────────────────────────────────
 describe('GET /api/tickets', () => {
   it('returns citizen\'s own tickets only', async () => {

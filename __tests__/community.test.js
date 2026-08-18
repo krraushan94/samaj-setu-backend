@@ -42,6 +42,71 @@ describe('GET /api/community/board', () => {
   });
 });
 
+// ─── Report / Hide a board post ────────────────────────────────────────────────
+describe('POST /api/community/board/:ticketId/report', () => {
+  it('lets a signed-in citizen report a post', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const res = await request(app)
+      .post('/api/community/board/ticket-uuid-1/report')
+      .set('Authorization', `Bearer ${citizenToken()}`)
+      .send({ reason: 'This looks fake' });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects an unauthenticated report', async () => {
+    const res = await request(app).post('/api/community/board/ticket-uuid-1/report').send({});
+    expect(res.status).toBe(401);
+  });
+});
+
+describe('GET /api/community/board/reports', () => {
+  it('admin can list reported posts', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ ticket_id: 'ticket-uuid-1', report_count: '2' }] });
+    const res = await request(app)
+      .get('/api/community/board/reports')
+      .set('Authorization', `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.reports)).toBe(true);
+  });
+
+  it('citizen cannot list reported posts', async () => {
+    const res = await request(app)
+      .get('/api/community/board/reports')
+      .set('Authorization', `Bearer ${citizenToken()}`);
+    expect(res.status).toBe(403);
+  });
+});
+
+describe('PATCH /api/community/board/:ticketId/hide', () => {
+  it('admin can hide a post from the public board', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const res = await request(app)
+      .patch('/api/community/board/ticket-uuid-1/hide')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ hidden: true });
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/hidden/i);
+  });
+
+  it('admin can restore a post to the public board', async () => {
+    mockQuery.mockResolvedValue({ rows: [] });
+    const res = await request(app)
+      .patch('/api/community/board/ticket-uuid-1/hide')
+      .set('Authorization', `Bearer ${adminToken()}`)
+      .send({ hidden: false });
+    expect(res.status).toBe(200);
+    expect(res.body.message).toMatch(/restored/i);
+  });
+
+  it('citizen cannot hide a post', async () => {
+    const res = await request(app)
+      .patch('/api/community/board/ticket-uuid-1/hide')
+      .set('Authorization', `Bearer ${citizenToken()}`)
+      .send({ hidden: true });
+    expect(res.status).toBe(403);
+  });
+});
+
 // ─── Events ────────────────────────────────────────────────────────────────────
 describe('GET /api/community/events', () => {
   it('returns events publicly', async () => {
