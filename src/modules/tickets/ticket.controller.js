@@ -1,12 +1,13 @@
-const { randomUUID: uuidv4 } = require('crypto');
+const { randomUUID: uuidv4, randomBytes } = require('crypto');
 const { query } = require('../../config/db');
 const { CATEGORY_DEPARTMENT_MAP, PAYMENT_EXEMPT_GROUPS, PAYMENT_EXEMPT_SUBCATEGORY_LABELS } = require('../../config/constants');
 const { asyncHandler } = require('../../middleware/errorHandler');
 const { needsModerationReview } = require('../../utils/moderation');
 const { notifyCitizen, notifyTeamMember, notifyDepartment } = require('../../utils/notify');
 
-// Generate ticket number: SJT-2026-XXXXX
-const genTicketNumber = () => `SJT-${new Date().getFullYear()}-${Math.random().toString(36).toUpperCase().slice(2, 7)}`;
+// Generate ticket number: SJT-2026-XXXXX — uses a CSPRNG rather than Math.random() since
+// this identifier ends up in citizen-facing tracking references.
+const genTicketNumber = () => `SJT-${new Date().getFullYear()}-${randomBytes(4).toString('hex').toUpperCase().slice(0, 5)}`;
 
 // Auto-determine priority based on category group + submitter gender.
 // `category` is the top-level group key (e.g. 'women_safety'); `subCategory` is the
@@ -20,16 +21,54 @@ const autoPriority = (category, subCategory, gender, requestedPriority) => {
   if (subCategory === 'Elder Abuse / Neglect' || subCategory === 'Caste-Based Discrimination') {
     return requestedPriority === 'critical' ? 'critical' : 'high';
   }
+  // Severe/vulnerable labour matters (bonded labour, child labour, workplace abuse) get the
+  // same treatment — they're the same PAYMENT_EXEMPT_SUBCATEGORY_LABELS list minus the three
+  // already handled above.
+  if (PAYMENT_EXEMPT_SUBCATEGORY_LABELS.includes(subCategory)) {
+    return requestedPriority === 'critical' ? 'critical' : 'high';
+  }
   return requestedPriority || 'medium';
+};
+
+// BMS/labour tickets carry worker-identity context no other category needs — checked here
+// (not just client-side) since the client can't be trusted to enforce a required field.
+const validateLabourDetails = (labourDetails) => {
+  const d = labourDetails || {};
+  if (!d.fullName?.trim()) return 'Worker\'s full name is required';
+  if (!d.organisationName?.trim()) return 'Organisation / employer name is required';
+  if (!d.aadharNumber?.trim() && !d.voterIdNumber?.trim()) return 'Aadhaar number or Voter ID is required';
+  if (d.aadharNumber?.trim() && !/^\d{12}$/.test(d.aadharNumber.trim())) return 'Aadhaar number must be exactly 12 digits';
+  if (d.voterIdNumber?.trim() && !/^[A-Za-z]{3}[0-9]{7}$/.test(d.voterIdNumber.trim())) return 'Enter a valid Voter ID (EPIC) number';
+  return null;
 };
 
 // Create a new ticket (citizen)
 const createTicket = asyncHandler(async (req, res) => {
-  const { category, subCategory, title, description, latitude, longitude, locationText, priority, isAnonymous } = req.body;
+  const { category, subCategory, title, description, latitude, longitude, locationText, priority, isAnonymous, labourDetails } = req.body;
   const userId = req.user.id;
 
   if (!title?.trim()) return res.status(400).json({ success: false, message: 'Title is required' });
   if (!locationText?.trim()) return res.status(400).json({ success: false, message: 'Location is required' });
+
+  let labourDetailsJson = null;
+  if (category === 'labour') {
+    const labourError = validateLabourDetails(labourDetails);
+    if (labourError) return res.status(400).json({ success: false, message: labourError });
+    // Only persist the known fields — never store arbitrary client-supplied keys as-is.
+    labourDetailsJson = JSON.stringify({
+      fullName: labourDetails.fullName.trim(),
+      organisationName: labourDetails.organisationName.trim(),
+      aadharNumber: labourDetails.aadharNumber?.trim() || null,
+      voterIdNumber: labourDetails.voterIdNumber?.trim() || null,
+      idCardNumber: labourDetails.idCardNumber?.trim() || null,
+      sector: labourDetails.sector?.trim() || null,
+      monthlyWage: labourDetails.monthlyWage?.trim() || null,
+      employmentDuration: labourDetails.employmentDuration?.trim() || null,
+      employerContact: labourDetails.employerContact?.trim() || null,
+      isBmsMember: !!labourDetails.isBmsMember,
+      bmsMembershipNumber: labourDetails.bmsMembershipNumber?.trim() || null,
+    });
+  }
 
   // Fetch user gender for auto-priority
   const userResult = await query('SELECT gender FROM users WHERE id=$1', [userId]);
@@ -54,10 +93,10 @@ const createTicket = asyncHandler(async (req, res) => {
 
   await query(
     `INSERT INTO tickets (id, ticket_number, user_id, category, sub_category, title, description,
-      latitude, longitude, location_text, priority, status, department_id, is_anonymous, needs_review)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      latitude, longitude, location_text, priority, status, department_id, is_anonymous, needs_review, labour_details)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
     [ticketId, ticketNumber, userId, category, subCategory, title, description,
-     latitude || null, longitude || null, locationText || null, finalPriority, initialStatus, departmentId, isAnonymous || false, flaggedForReview]
+     latitude || null, longitude || null, locationText || null, finalPriority, initialStatus, departmentId, isAnonymous || false, flaggedForReview, labourDetailsJson]
   );
 
   // Audit log
@@ -129,6 +168,16 @@ const getTicket = asyncHandler(async (req, res) => {
   if (!result.rows.length) return res.status(404).json({ success: false, message: 'Ticket not found' });
 
   const ticket = result.rows[0];
+
+  // A citizen may only view their own ticket — otherwise any logged-in citizen could
+  // enumerate ticket IDs and read someone else's report, including sensitive categories
+  // (women-safety, missing-child, abuse) that the app deliberately keeps private elsewhere.
+  // Team/admin cross-department read visibility is intentional (see listTickets above) and
+  // untouched here — only the citizen case was ever unscoped.
+  if (req.user.role === 'citizen' && ticket.user_id !== req.user.id) {
+    return res.status(404).json({ success: false, message: 'Ticket not found' });
+  }
+
   // Mask mobile/caregiver contact for citizens — only team/admin need it to reach a caregiver
   if (req.user.role === 'citizen') { delete ticket.mobile; delete ticket.caregiver_name; delete ticket.caregiver_mobile; }
 

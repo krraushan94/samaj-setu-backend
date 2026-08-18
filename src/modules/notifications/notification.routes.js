@@ -30,12 +30,27 @@ router.patch('/:id/read', verifyToken, asyncHandler(async (req, res) => {
 router.post('/broadcast', verifyToken, requireAdmin, asyncHandler(async (req, res) => {
   const { title, body, type } = req.body;
   const users = await query('SELECT id FROM users WHERE is_blocked=FALSE');
-  const inserts = users.rows.map(u =>
-    query('INSERT INTO notifications (id, user_id, title, body, type) VALUES ($1,$2,$3,$4,$5)',
-      [uuidv4(), u.id, title, body, type || 'announcement'])
-  );
-  await Promise.all(inserts);
-  // TODO: send FCM push notifications when Firebase is configured
+
+  if (users.rows.length) {
+    // Single batched INSERT via unnest() instead of one query per recipient — the old loop
+    // opened as many concurrent pool connections as there were users, which doesn't scale
+    // past a modest user base.
+    const n = users.rows.length;
+    await query(
+      `INSERT INTO notifications (id, user_id, title, body, type)
+       SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[])`,
+      [
+        Array.from({ length: n }, () => uuidv4()),
+        users.rows.map((u) => u.id),
+        Array(n).fill(title),
+        Array(n).fill(body),
+        Array(n).fill(type || 'announcement'),
+      ]
+    );
+  }
+  // TODO: send FCM push notifications when Firebase is configured — needs a device push-token
+  // column (none exists yet on users/team_members) and mobile-side registration, so this is a
+  // separate feature, not a one-line fix alongside the DB-row write above.
   res.json({ success: true, sent: users.rows.length });
 }));
 

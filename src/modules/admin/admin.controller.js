@@ -41,19 +41,38 @@ const ALLOWED_TABLES = [
   'app_impressions', 'ticket_history', 'events', 'missing_persons', 'office_visits',
 ];
 
+// Every table above sorts by created_at except 'departments', which never got one (it's just
+// id + name) — browsing/exporting it used to throw a raw Postgres "column does not exist" error.
+const ORDER_COLUMN = { departments: 'name' };
+
+// `table` is checked against ALLOWED_TABLES below, but since it still gets interpolated
+// directly into the SQL text (Postgres has no way to parameterize an identifier), this adds a
+// second, independent structural check — so a future edit to the whitelist (e.g. pasting in a
+// value that was never meant to be a literal table name) can't reopen SQL injection on its own.
+const isValidTableName = (table) => /^[a-z_]+$/.test(table) && ALLOWED_TABLES.includes(table);
+
 const browseTable = asyncHandler(async (req, res) => {
   const { table } = req.params;
-  if (!ALLOWED_TABLES.includes(table)) {
+  if (!isValidTableName(table)) {
     return res.status(400).json({ success: false, message: 'Table not allowed' });
   }
   const { page = 1, limit = 50, search } = req.query;
   const offset = (page - 1) * limit;
+  const orderCol = ORDER_COLUMN[table] || 'created_at';
 
-  // Simple full-row count
-  const countResult = await query(`SELECT COUNT(*) FROM "${table}"`);
+  // Generic text search across every column, without needing to know this table's schema:
+  // casting the whole row to text and doing a substring match. Not index-backed, but this is
+  // a low-traffic admin tool, not a citizen-facing search.
+  const searchClause = search ? `WHERE t::text ILIKE $1` : '';
+  const searchParams = search ? [`%${search}%`] : [];
+
+  const countResult = await query(`SELECT COUNT(*) FROM "${table}" t ${searchClause}`, searchParams);
   const total = +countResult.rows[0].count;
 
-  const result = await query(`SELECT * FROM "${table}" ORDER BY created_at DESC LIMIT $1 OFFSET $2`, [limit, offset]);
+  const result = await query(
+    `SELECT t.* FROM "${table}" t ${searchClause} ORDER BY "${orderCol}" DESC LIMIT $${searchParams.length + 1} OFFSET $${searchParams.length + 2}`,
+    [...searchParams, limit, offset]
+  );
   // Never surface password hashes, even to Admin_Raushan — there's no legitimate use for them
   // here and it's needless exposure if this screen is ever shared or the session compromised.
   result.rows.forEach((row) => delete row.password_hash);
@@ -89,10 +108,11 @@ const recordImpression = asyncHandler(async (req, res) => {
 // CSV export for any allowed table
 const exportTable = asyncHandler(async (req, res) => {
   const { table } = req.params;
-  if (!ALLOWED_TABLES.includes(table)) {
+  if (!isValidTableName(table)) {
     return res.status(400).json({ success: false, message: 'Table not allowed' });
   }
-  const result = await query(`SELECT * FROM "${table}" ORDER BY created_at DESC`);
+  const orderCol = ORDER_COLUMN[table] || 'created_at';
+  const result = await query(`SELECT * FROM "${table}" ORDER BY "${orderCol}" DESC`);
   result.rows.forEach((row) => delete row.password_hash);
   if (!result.rows.length) return res.json({ success: true, csv: '' });
 

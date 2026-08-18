@@ -16,11 +16,15 @@ const errorHandler = (err, _req, res, _next) => {
   // intentional error path returns explicitly with res.status(...).json(...). So anything
   // that lands here is an unexpected internal error (DB driver, bcrypt, etc.) and its raw
   // message should never be forwarded to the client in production.
-  const isProd = process.env.NODE_ENV === 'production';
+  // Safe-by-default: only NODE_ENV==='development' gets the raw message/stack. Any other value
+  // (production, staging, unset, a typo) falls through to the generic message — a misconfigured
+  // deploy should never accidentally start leaking internal error text just because it isn't
+  // the exact string "production".
+  const isDev = process.env.NODE_ENV === 'development';
   res.status(status).json({
     success: false,
-    message: isProd && !err.status ? 'Internal server error' : (err.message || 'Internal server error'),
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
+    message: isDev || err.status ? (err.message || 'Internal server error') : 'Internal server error',
+    ...(isDev && { stack: err.stack }),
   });
 };
 

@@ -15,6 +15,19 @@ const otpLimiter = rateLimit({
   message: { success: false, message: 'Too many OTP requests. Please try again in a few minutes.' },
 });
 
+// OTP verify — a 6-digit code has only 1,000,000 possibilities; without a limiter here,
+// an attacker could brute-force it within its 10-minute validity window using the generic
+// global limiter's much wider budget (200 req/15min/IP). Generous enough that a genuine
+// user mistyping their code a few times is never blocked.
+const otpVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => `${ipKeyGenerator(req.ip)}:${req.body?.mobile || ''}`,
+  message: { success: false, message: 'Too many OTP attempts. Please request a new code and try again.' },
+});
+
 // Login — keyed by IP+identifier, generous enough for a genuine user who mistypes a password
 // a few times, tight enough to blunt credential-stuffing.
 const loginLimiter = rateLimit({
@@ -37,13 +50,18 @@ const ticketCreateLimiter = rateLimit({
   message: { success: false, message: 'Too many issues submitted recently. Please try again later.' },
 });
 
+// Shared factory for the two password-reset limiters below — same budget (5/hour), kept as
+// separate instances (separate in-memory counters) so the admin-only flow and the
+// any-role universal flow can't eat into each other's budget, without duplicating config.
+const makeHourlyLimiter = () => rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+
 // Password reset — a handful of attempts per hour is plenty for a real admin who forgot
 // their password, and keeps this endpoint from being used to spam the recovery inbox.
-const passwordResetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const passwordResetLimiter = makeHourlyLimiter();
 
 // Same idea, separate budget — the universal change/forgot/reset-password flow (any role)
 // shares nothing with passwordResetLimiter above, so it can't silently eat into admin's
 // or a citizen's own recovery budget just because more people are using the app.
-const universalPasswordResetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 5, standardHeaders: true, legacyHeaders: false });
+const universalPasswordResetLimiter = makeHourlyLimiter();
 
-module.exports = { otpLimiter, loginLimiter, ticketCreateLimiter, passwordResetLimiter, universalPasswordResetLimiter };
+module.exports = { otpLimiter, otpVerifyLimiter, loginLimiter, ticketCreateLimiter, passwordResetLimiter, universalPasswordResetLimiter };

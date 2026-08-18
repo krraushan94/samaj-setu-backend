@@ -1,4 +1,13 @@
 require('dotenv').config();
+
+// Fail fast and loudly rather than booting into a state where every JWT sign/verify call
+// either throws or (worse, with some libraries) silently uses an insecure default — this
+// should be caught by whoever deploys, not discovered per-request as confusing 500s/401s.
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET environment variable is not set. Refusing to start.');
+  process.exit(1);
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -65,6 +74,7 @@ async function startServer() {
       await require('./db/migrate_v7')();
       await require('./db/migrate_v8')();
       await require('./db/migrate_v9')();
+      await require('./db/migrate_v10')();
       await require('./db/seed')();
     }
   } catch (err) {
