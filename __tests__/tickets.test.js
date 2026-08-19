@@ -31,6 +31,29 @@ describe('POST /api/tickets', () => {
     expect(res.body.ticketNumber).toMatch(/^SJT-\d{4}-/);
   });
 
+  it('retries with a fresh ticket number if a rare ticket_number collision occurs', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })   // get user gender
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-uuid-1' }] }) // find dept
+      .mockResolvedValueOnce({ rows: [] })                      // moderation flagged-terms lookup
+      .mockRejectedValueOnce({ code: '23505' })                 // first insert attempt: collides
+      .mockResolvedValueOnce({ rows: [] })                      // second insert attempt: succeeds
+      .mockResolvedValueOnce({ rows: [] });                     // audit log
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`).send(validPayload);
+    expect(res.status).toBe(201);
+    expect(res.body.ticketNumber).toMatch(/^SJT-\d{4}-/);
+  });
+
+  it('gives up and surfaces a 409 after repeated ticket_number collisions', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-uuid-1' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockRejectedValue({ code: '23505' }); // every insert attempt collides
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`).send(validPayload);
+    expect(res.status).toBe(409);
+  });
+
   it('auto-escalates to CRITICAL for women_safety + female gender', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ gender: 'female' }] })
@@ -108,7 +131,7 @@ describe('POST /api/tickets — BMS labour details', () => {
     locationText: 'Hatiara Colony',
     labourDetails: {
       fullName: 'Sunita Roy', organisationName: 'Sharma Household',
-      aadharNumber: '123456789012', ...overrides,
+      liveLocation: '22.65432, 88.45123', aadharNumber: '123456789012', ...overrides,
     },
   });
 
@@ -124,6 +147,13 @@ describe('POST /api/tickets — BMS labour details', () => {
       .send(labourPayload({ organisationName: '' }));
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/organisation/i);
+  });
+
+  it('rejects a labour ticket with no live location', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
+      .send(labourPayload({ liveLocation: '' }));
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/location/i);
   });
 
   it('rejects a labour ticket with neither Aadhaar nor Voter ID', async () => {
@@ -173,6 +203,7 @@ describe('POST /api/tickets — BMS labour details', () => {
     const stored = JSON.parse(labourDetailsJson);
     expect(stored.fullName).toBe('Sunita Roy');
     expect(stored.organisationName).toBe('Sharma Household');
+    expect(stored.liveLocation).toBe('22.65432, 88.45123');
     expect(stored.sector).toBe('unorganized');
     expect(stored.extraHackerField).toBeUndefined();
   });

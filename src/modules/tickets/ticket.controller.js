@@ -9,6 +9,26 @@ const { notifyCitizen, notifyTeamMember, notifyDepartment } = require('../../uti
 // this identifier ends up in citizen-facing tracking references.
 const genTicketNumber = () => `SJT-${new Date().getFullYear()}-${randomBytes(4).toString('hex').toUpperCase().slice(0, 5)}`;
 
+const MAX_TICKET_NUMBER_ATTEMPTS = 5;
+
+// ticket_number is the table's only UNIQUE constraint, and genTicketNumber()'s 5-hex-char
+// suffix has only ~1M possible values — astronomically unlikely to collide on any single
+// attempt, but non-negligible across a year's worth of tickets. Regenerate and retry rather
+// than fail a citizen's submission over sheer bad luck; any other unique-violation would mean
+// a second constraint was added to this table without updating this assumption, so it's
+// re-thrown immediately instead of being silently retried forever.
+async function insertTicketRetryingOnNumberCollision(insertFn) {
+  for (let attempt = 1; attempt <= MAX_TICKET_NUMBER_ATTEMPTS; attempt++) {
+    const ticketNumber = genTicketNumber();
+    try {
+      await insertFn(ticketNumber);
+      return ticketNumber;
+    } catch (err) {
+      if (err.code !== '23505' || attempt === MAX_TICKET_NUMBER_ATTEMPTS) throw err;
+    }
+  }
+}
+
 // Auto-determine priority based on category group + submitter gender.
 // `category` is the top-level group key (e.g. 'women_safety'); `subCategory` is the
 // human-readable sub-category label the app sends (e.g. 'Missing Child', 'Epidemic Alert') —
@@ -36,6 +56,7 @@ const validateLabourDetails = (labourDetails) => {
   const d = labourDetails || {};
   if (!d.fullName?.trim()) return 'Worker\'s full name is required';
   if (!d.organisationName?.trim()) return 'Organisation / employer name is required';
+  if (!d.liveLocation?.trim()) return 'Worker\'s live location is required';
   if (!d.aadharNumber?.trim() && !d.voterIdNumber?.trim()) return 'Aadhaar number or Voter ID is required';
   if (d.aadharNumber?.trim() && !/^\d{12}$/.test(d.aadharNumber.trim())) return 'Aadhaar number must be exactly 12 digits';
   if (d.voterIdNumber?.trim() && !/^[A-Za-z]{3}[0-9]{7}$/.test(d.voterIdNumber.trim())) return 'Enter a valid Voter ID (EPIC) number';
@@ -58,6 +79,7 @@ const createTicket = asyncHandler(async (req, res) => {
     labourDetailsJson = JSON.stringify({
       fullName: labourDetails.fullName.trim(),
       organisationName: labourDetails.organisationName.trim(),
+      liveLocation: labourDetails.liveLocation.trim(),
       aadharNumber: labourDetails.aadharNumber?.trim() || null,
       voterIdNumber: labourDetails.voterIdNumber?.trim() || null,
       idCardNumber: labourDetails.idCardNumber?.trim() || null,
@@ -88,16 +110,15 @@ const createTicket = asyncHandler(async (req, res) => {
   const initialStatus = paymentRequired ? 'payment_pending' : 'open';
 
   const ticketId = uuidv4();
-  const ticketNumber = genTicketNumber();
   const flaggedForReview = await needsModerationReview(`${title || ''} ${description || ''}`);
 
-  await query(
+  const ticketNumber = await insertTicketRetryingOnNumberCollision((num) => query(
     `INSERT INTO tickets (id, ticket_number, user_id, category, sub_category, title, description,
       latitude, longitude, location_text, priority, status, department_id, is_anonymous, needs_review, labour_details)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-    [ticketId, ticketNumber, userId, category, subCategory, title, description,
+    [ticketId, num, userId, category, subCategory, title, description,
      latitude || null, longitude || null, locationText || null, finalPriority, initialStatus, departmentId, isAnonymous || false, flaggedForReview, labourDetailsJson]
-  );
+  ));
 
   // Audit log
   await query(
@@ -308,14 +329,13 @@ const sosTicket = asyncHandler(async (req, res) => {
   const departmentId = deptResult.rows[0]?.id;
 
   const ticketId = uuidv4();
-  const ticketNumber = genTicketNumber();
 
-  await query(
+  const ticketNumber = await insertTicketRetryingOnNumberCollision((num) => query(
     `INSERT INTO tickets (id, ticket_number, user_id, category, sub_category, title, description,
       latitude, longitude, location_text, priority, status, department_id)
      VALUES ($1,$2,$3,'women_safety','Unsafe Area','🚨 SOS EMERGENCY','Emergency SOS triggered',$4,$5,$6,'critical','open',$7)`,
-    [ticketId, ticketNumber, userId, latitude || null, longitude || null, locationText || 'Location not provided', departmentId]
-  );
+    [ticketId, num, userId, latitude || null, longitude || null, locationText || 'Location not provided', departmentId]
+  ));
 
   // Audit log — same pattern as createTicket, so SOS triggers are traceable too
   await query(
