@@ -39,7 +39,7 @@ const pool = {
   on: () => {},
 };
 
-const MIGRATION_FILES = ['migrate', 'migrate_v2', 'migrate_v3', 'migrate_v4', 'migrate_v5', 'migrate_v6', 'migrate_v7', 'migrate_v8', 'migrate_v9', 'migrate_v10'];
+const MIGRATION_FILES = ['migrate', 'migrate_v2', 'migrate_v3', 'migrate_v4', 'migrate_v5', 'migrate_v6', 'migrate_v7', 'migrate_v8', 'migrate_v9', 'migrate_v10', 'migrate_v11'];
 
 // Builds the full real schema (via the real migration files) and seeds it (via the
 // real seed.js) exactly once. Must run inside beforeAll, after jest.mock('../src/config/db', ...)

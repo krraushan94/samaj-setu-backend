@@ -182,3 +182,46 @@ describe('POST /api/media/upload', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('POST /api/media/upload-photo', () => {
+  it('rejects with no photo attached', async () => {
+    const res = await request(app)
+      .post('/api/media/upload-photo')
+      .set('Authorization', `Bearer ${citizenToken()}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a non-image file', async () => {
+    const res = await request(app)
+      .post('/api/media/upload-photo')
+      .set('Authorization', `Bearer ${citizenToken()}`)
+      .attach('photo', NOT_MEDIA, 'photo.jpg');
+    expect(res.status).toBe(400);
+    expect(mockS3Send).not.toHaveBeenCalled();
+  });
+
+  it('rejects a valid non-image media type (e.g. audio) — this endpoint is images only', async () => {
+    const res = await request(app)
+      .post('/api/media/upload-photo')
+      .set('Authorization', `Bearer ${citizenToken()}`)
+      .attach('photo', MP3_ID3, 'clip.mp3');
+    expect(res.status).toBe(400);
+  });
+
+  it('uploads a valid JPEG and returns its URL', async () => {
+    const res = await request(app)
+      .post('/api/media/upload-photo')
+      .set('Authorization', `Bearer ${citizenToken()}`)
+      .attach('photo', JPEG, 'photo.jpg');
+    expect(res.status).toBe(200);
+    expect(res.body.url).toMatch(/^https:\/\//);
+    expect(mockS3Send).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 401 with no auth token', async () => {
+    const res = await request(app)
+      .post('/api/media/upload-photo')
+      .attach('photo', JPEG, 'photo.jpg');
+    expect(res.status).toBe(401);
+  });
+});

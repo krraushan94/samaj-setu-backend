@@ -66,7 +66,7 @@ const createTask = asyncHandler(async (req, res) => {
   );
 
   if (assignedTo) {
-    await notifyTeamMember(assignedTo, 'New task assigned', `"${title.trim()}" was assigned to you.`, 'task_assigned');
+    await notifyTeamMember(assignedTo, 'New task assigned', `"${title.trim()}" was assigned to you.`, 'task_assigned', { entityType: 'task', entityId: id });
   }
   res.status(201).json({ success: true, task: result.rows[0] });
 });
@@ -91,7 +91,7 @@ const updateTask = asyncHandler(async (req, res) => {
       [status || null, progressNote ?? null, id]
     );
     if (status === 'completed' && task.created_by_role === 'leader') {
-      await notifyTeamMember(task.created_by, 'Task completed', `"${task.title}" was marked completed by ${actorName(req)}.`, 'task_status');
+      await notifyTeamMember(task.created_by, 'Task completed', `"${task.title}" was marked completed by ${actorName(req)}.`, 'task_status', { entityType: 'task', entityId: id });
     }
     return res.json({ success: true, task: result.rows[0] });
   }
@@ -123,7 +123,7 @@ const updateTask = asyncHandler(async (req, res) => {
   );
 
   if (assignedTo && assignedTo !== task.assigned_to) {
-    await notifyTeamMember(assignedTo, 'Task assigned to you', `"${result.rows[0].title}" was assigned to you.`, 'task_assigned');
+    await notifyTeamMember(assignedTo, 'Task assigned to you', `"${result.rows[0].title}" was assigned to you.`, 'task_assigned', { entityType: 'task', entityId: id });
   }
   res.json({ success: true, task: result.rows[0] });
 });

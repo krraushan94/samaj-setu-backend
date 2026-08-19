@@ -90,4 +90,26 @@ router.post('/upload', verifyToken, upload.array('files', 5), asyncHandler(async
   res.json({ success: true, uploaded });
 }));
 
+// Standalone photo upload — not tied to a ticket, so media_attachments doesn't apply.
+// Currently used for missing-person report photos, where the DB just stores the returned
+// URL directly on missing_persons.photo_url. Restricted to actual image bytes (not the
+// broader ticket-media type set) since that's the only thing this endpoint is for.
+router.post('/upload-photo', verifyToken, upload.single('photo'), asyncHandler(async (req, res) => {
+  if (!req.file) return res.status(400).json({ success: false, message: 'No photo provided' });
+
+  const detected = MAGIC_SIGNATURES.filter((s) => s.mime.startsWith('image/')).find((s) => s.test(req.file.buffer))?.mime;
+  if (!detected) return res.status(400).json({ success: false, message: 'File is not a recognized image' });
+
+  const safeName = req.file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-100);
+  const key = `missing-persons/${req.user.id}/${uuidv4()}-${safeName}`;
+  await s3.send(new PutObjectCommand({
+    Bucket: process.env.AWS_S3_BUCKET,
+    Key: key,
+    Body: req.file.buffer,
+    ContentType: detected,
+  }));
+  const url = `https://${process.env.AWS_S3_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+  res.json({ success: true, url });
+}));
+
 module.exports = router;

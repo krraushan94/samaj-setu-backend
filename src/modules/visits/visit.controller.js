@@ -78,7 +78,7 @@ const scheduleVisit = asyncHandler(async (req, res) => {
       cancelled: `Your office visit request was cancelled.${adminNote ? ` Note: ${adminNote}` : ''}`,
       completed: 'Your office visit has been marked completed. Thank you for visiting.',
     };
-    await notifyCitizen(visit.user_id, 'Office visit update', messages[nextStatus], 'office_visit');
+    await notifyCitizen(visit.user_id, 'Office visit update', messages[nextStatus], 'office_visit', { entityType: 'office_visit', entityId: id });
   }
   res.json({ success: true, visit });
 });

@@ -213,6 +213,7 @@ const updateStatus = asyncHandler(async (req, res) => {
     `Ticket ${current.rows[0].ticket_number} updated`,
     `Your ticket status is now "${status}".${note ? ` Note: ${note}` : ''}`,
     'ticket_status',
+    { entityType: 'ticket', entityId: id },
   );
   res.json({ success: true, message: 'Status updated' });
 });
@@ -271,7 +272,7 @@ const assignTicket = asyncHandler(async (req, res) => {
     [assignedTo || null, departmentId || null, id]
   );
   if (assignedTo) {
-    await notifyTeamMember(assignedTo, 'New ticket assigned', `Ticket ${current.rows[0].ticket_number} has been assigned to you.`, 'ticket_assigned');
+    await notifyTeamMember(assignedTo, 'New ticket assigned', `Ticket ${current.rows[0].ticket_number} has been assigned to you.`, 'ticket_assigned', { entityType: 'ticket', entityId: id });
   }
   res.json({ success: true, message: 'Ticket assigned' });
 });
@@ -327,6 +328,7 @@ const sosTicket = asyncHandler(async (req, res) => {
     '🚨 SOS Emergency',
     `${user?.full_name || 'A citizen'} triggered an SOS at ${locationText || 'an unknown location'}. Ticket ${ticketNumber}.`,
     'sos',
+    { entityType: 'ticket', entityId: ticketId },
   );
 
   res.status(201).json({ success: true, ticketId, ticketNumber, message: 'SOS alert sent — the Social Welfare team has been notified. Help is on the way.' });
