@@ -1,0 +1,32 @@
+name: Daily production smoke test
+
+# Catches a broken deploy before a citizen does — same spirit as the role/category
+# simulation used during development (scripts/fullRoleCategorySimulation.js), but against
+# the real live API. Deliberately read-only/side-effect-free: no login, no ticket creation,
+# nothing that could write real data — just confirms the public surface citizens depend on
+# is actually up and returning sane responses. $0 — GitHub Actions free minutes cover one
+# short job a day easily.
+on:
+  schedule:
+    - cron: '0 3 * * *' # once daily, 3am UTC (~8:30am IST)
+  workflow_dispatch: {}
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Health check
+        run: |
+          curl -sf --max-time 60 https://samaj-setu-backend.onrender.com/health | tee /dev/stderr | grep -q '"status":"ok"'
+
+      - name: Community board is reachable and returns valid JSON
+        run: |
+          curl -sf --max-time 30 "https://samaj-setu-backend.onrender.com/api/community/board?limit=1" | tee /dev/stderr | grep -q '"success":true'
+
+      - name: Public transparency stats are reachable and returns valid JSON
+        run: |
+          curl -sf --max-time 30 https://samaj-setu-backend.onrender.com/api/community/stats | tee /dev/stderr | grep -q '"success":true'
+
+      - name: Categories list is reachable
+        run: |
+          curl -sf --max-time 30 https://samaj-setu-backend.onrender.com/api/admin/categories | tee /dev/stderr | grep -q '"success":true'

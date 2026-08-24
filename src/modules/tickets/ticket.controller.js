@@ -91,6 +91,9 @@ const createTicket = asyncHandler(async (req, res) => {
       liveLocation: labourDetails.liveLocation.trim(),
       routeFrom: isTransportLabourSubCategory(subCategory) ? labourDetails.routeFrom.trim() : null,
       routeTo: isTransportLabourSubCategory(subCategory) ? labourDetails.routeTo.trim() : null,
+      // Optional even for transport worker types — unlike routeFrom/routeTo, never required.
+      vehicleNumber: isTransportLabourSubCategory(subCategory) ? (labourDetails.vehicleNumber?.trim() || null) : null,
+      vehicleOwnerName: isTransportLabourSubCategory(subCategory) ? (labourDetails.vehicleOwnerName?.trim() || null) : null,
       aadharNumber: labourDetails.aadharNumber?.trim() || null,
       voterIdNumber: labourDetails.voterIdNumber?.trim() || null,
       idCardNumber: labourDetails.idCardNumber?.trim() || null,
@@ -365,4 +368,29 @@ const sosTicket = asyncHandler(async (req, res) => {
   res.status(201).json({ success: true, ticketId, ticketNumber, message: 'SOS alert sent — the Social Welfare team has been notified. Help is on the way.' });
 });
 
-module.exports = { createTicket, listTickets, getTicket, updateStatus, upvoteTicket, rateTicket, assignTicket, addNote, sosTicket };
+// Nudges a citizen at the details step, before they submit a near-duplicate — "3 others
+// reported this near you, upvote instead?" There's no reliable lat/lng on tickets today (the
+// app sends locationText as free text, sometimes a GPS string, sometimes typed), so "nearby"
+// is approximated by the reporter's own ward, which is the real geographic unit this app
+// already scopes everything else by (admin board filters, department stats, etc).
+const findNearbyDuplicates = asyncHandler(async (req, res) => {
+  const { category, subCategory } = req.query;
+  if (!category || !subCategory) return res.json({ success: true, duplicates: [] });
+
+  const userResult = await query('SELECT ward FROM users WHERE id=$1', [req.user.id]);
+  const ward = userResult.rows[0]?.ward;
+  if (!ward) return res.json({ success: true, duplicates: [] });
+
+  const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+  const result = await query(
+    `SELECT t.id, t.ticket_number, t.title, t.upvote_count, t.status, t.created_at
+     FROM tickets t JOIN users u ON t.user_id = u.id
+     WHERE t.category = $1 AND t.sub_category = $2 AND u.ward = $3
+       AND t.status != 'closed' AND t.created_at >= $4 AND t.user_id != $5
+     ORDER BY t.created_at DESC LIMIT 3`,
+    [category, subCategory, ward, fourteenDaysAgo, req.user.id]
+  );
+  res.json({ success: true, duplicates: result.rows });
+});
+
+module.exports = { createTicket, listTickets, getTicket, updateStatus, upvoteTicket, rateTicket, assignTicket, addNote, sosTicket, findNearbyDuplicates };

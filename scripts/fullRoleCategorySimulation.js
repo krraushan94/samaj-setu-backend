@@ -192,12 +192,19 @@ async function main() {
         priority: 'medium',
       };
       if (category === 'labour') {
+        const isTransport = subCategory.startsWith('Auto / Taxi / Cab Driver') || subCategory.startsWith('Bus / Transport Worker');
         body.labourDetails = {
           fullName: `Worker ${i}`,
           organisationName: `Sim Employer ${i}`,
           liveLocation: `22.6${i.toString().padStart(2, '0')}00, 88.4${i.toString().padStart(2, '0')}00`,
           aadharNumber: i % 2 === 0 ? nextAadhar() : undefined,
           voterIdNumber: i % 2 === 0 ? undefined : nextVoterId(),
+          ...(isTransport ? {
+            routeFrom: `Sim Stand ${i}`, routeTo: `Sim Destination ${i}`,
+            // Vehicle details are optional — only half the simulated transport workers give them,
+            // to actually exercise the "not required" path rather than always filling every field.
+            ...(i % 2 === 0 ? { vehicleNumber: `WB20AB${1000 + i}`, vehicleOwnerName: `Owner ${i}` } : {}),
+          } : {}),
         };
       }
 
@@ -220,6 +227,22 @@ async function main() {
       }
       if (category === 'women_safety' && gender === 'female') {
         record('citizen', `women_safety female reporter: auto-critical priority`, ticket.priority === 'critical', `priority=${ticket.priority}`);
+      }
+
+      // Every citizen registers a push token right after their ticket, same as the app does on
+      // login — deliberately NOT prefixed "ExponentPushToken" so notify.js's real send guard
+      // (expoPush.js) skips the actual network call to Expo; that send path is already covered
+      // with a mocked axios in __tests__/notify.test.js, and hitting Expo's real API hundreds
+      // of times here would just be slow, pointless load on their infrastructure.
+      const pushRes = await request(app).post('/api/auth/push-token').set('Authorization', `Bearer ${citizen.token}`)
+        .send({ token: `sim-fake-token-${category}-${i}` });
+      record('citizen', `${category} user ${i}: register push token`, pushRes.status === 200, `status ${pushRes.status}`);
+
+      // Nearby-duplicates nudge — every 5th citizen checks it, cheap enough to not slow the run down.
+      if (i % 5 === 0) {
+        const dupRes = await request(app).get(`/api/tickets/nearby-duplicates?category=${encodeURIComponent(category)}&subCategory=${encodeURIComponent(subCategory)}`)
+          .set('Authorization', `Bearer ${citizen.token}`);
+        record('citizen', `${category} user ${i}: nearby-duplicates check`, dupRes.status === 200 && Array.isArray(dupRes.body.duplicates), `status ${dupRes.status}`);
       }
 
       let paymentRequired = ticket.paymentRequired !== false;
@@ -283,6 +306,11 @@ async function main() {
     const chatRes = await request(app).post('/api/teamwork/messages').set('Authorization', `Bearer ${leader.token}`).send({ message: `Hello ${deptName} team, from the leader.` });
     record('leader', `${deptName}: leader posts chat message`, chatRes.status === 201, `status ${chatRes.status}: ${JSON.stringify(chatRes.body)}`);
   }
+
+  // Public transparency stats — no auth, reflects every ticket the leader phase just resolved.
+  const publicStatsRes = await request(app).get('/api/community/stats');
+  record('admin', 'public transparency stats are reachable without auth', publicStatsRes.status === 200, `status ${publicStatsRes.status}`);
+  record('admin', 'public transparency stats reflect the tickets resolved above', publicStatsRes.body.resolvedThisMonth > 0, `resolvedThisMonth=${publicStatsRes.body.resolvedThisMonth}`);
 
   // ---------------------------------------------------------------------------------
   // ADMIN: cross-department oversight, reassignment, stats, moderation, visits, sub-admin

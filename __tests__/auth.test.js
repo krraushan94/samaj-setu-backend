@@ -211,3 +211,34 @@ describe('POST /api/auth/refresh', () => {
     expect(res.status).toBe(401);
   });
 });
+
+// ─── Push Token Registration ────────────────────────────────────────────────────
+describe('POST /api/auth/push-token', () => {
+  it('stores the token on the users table for a citizen', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/auth/push-token').set('Authorization', `Bearer ${citizenToken()}`)
+      .send({ token: 'ExponentPushToken[abc123]' });
+    expect(res.status).toBe(200);
+    expect(mockQuery).toHaveBeenCalledWith('UPDATE users SET push_token=$1 WHERE id=$2', ['ExponentPushToken[abc123]', 'user-uuid-1']);
+  });
+
+  it('stores the token on the team_members table for a leader', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/auth/push-token').set('Authorization', `Bearer ${leaderToken()}`)
+      .send({ token: 'ExponentPushToken[xyz789]' });
+    expect(res.status).toBe(200);
+    expect(mockQuery).toHaveBeenCalledWith('UPDATE team_members SET push_token=$1 WHERE id=$2', ['ExponentPushToken[xyz789]', 'team-uuid-1']);
+  });
+
+  it('is a no-op for admin (no push-relevant table) but still returns success', async () => {
+    const res = await request(app).post('/api/auth/push-token').set('Authorization', `Bearer ${adminToken()}`)
+      .send({ token: 'ExponentPushToken[ignored]' });
+    expect(res.status).toBe(200);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 without a token', async () => {
+    const res = await request(app).post('/api/auth/push-token').send({ token: 'ExponentPushToken[abc]' });
+    expect(res.status).toBe(401);
+  });
+});

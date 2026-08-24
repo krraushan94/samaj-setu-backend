@@ -8,6 +8,28 @@ const { citizenToken, adminToken } = require('./helpers/fixtures');
 
 beforeEach(() => mockQuery.mockReset());
 
+// ─── Public Transparency Stats ─────────────────────────────────────────────────
+describe('GET /api/community/stats', () => {
+  it('returns aggregate stats without authentication', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [
+      { created_at: '2026-08-01T00:00:00.000Z', updated_at: '2026-08-05T00:00:00.000Z' },
+      { created_at: '2026-08-02T00:00:00.000Z', updated_at: '2026-08-04T00:00:00.000Z' },
+    ] });
+    const res = await request(app).get('/api/community/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.resolvedThisMonth).toBe(2);
+    expect(res.body.avgResolutionDays).toBe(3); // (4 days + 2 days) / 2
+  });
+
+  it('returns zero avg when nothing resolved yet', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).get('/api/community/stats');
+    expect(res.status).toBe(200);
+    expect(res.body.resolvedThisMonth).toBe(0);
+    expect(res.body.avgResolutionDays).toBe(0);
+  });
+});
+
 // ─── Community Board ───────────────────────────────────────────────────────────
 describe('GET /api/community/board', () => {
   it('returns public board without authentication', async () => {

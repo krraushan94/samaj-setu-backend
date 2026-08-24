@@ -1,7 +1,7 @@
 const { Router } = require('express');
 const { verifyToken, requireTeamLeader, requireCitizen } = require('../../middleware/auth');
 const { ticketCreateLimiter } = require('../../middleware/rateLimiters');
-const { createTicket, listTickets, getTicket, updateStatus, upvoteTicket, rateTicket, assignTicket, addNote, sosTicket } = require('./ticket.controller');
+const { createTicket, listTickets, getTicket, updateStatus, upvoteTicket, rateTicket, assignTicket, addNote, sosTicket, findNearbyDuplicates } = require('./ticket.controller');
 
 const router = Router();
 
@@ -9,9 +9,11 @@ const router = Router();
 // foreign-keys to the citizen `users` table — calling them as admin/team crashes with a raw
 // FK-violation 500 (admin/team ids live in separate tables), so these are citizen-only.
 // SOS is deliberately NOT rate-limited — throttling a genuine emergency would defeat the point.
-router.post('/sos',         verifyToken, requireCitizen, sosTicket);
-router.post('/',            verifyToken, requireCitizen, ticketCreateLimiter, createTicket);
-router.get('/',             verifyToken, listTickets);
+router.post('/sos',                verifyToken, requireCitizen, sosTicket);
+router.post('/',                   verifyToken, requireCitizen, ticketCreateLimiter, createTicket);
+router.get('/',                    verifyToken, listTickets);
+// Must be registered before /:id — otherwise Express would match this path as {id: 'nearby-duplicates'}.
+router.get('/nearby-duplicates',   verifyToken, requireCitizen, findNearbyDuplicates);
 router.get('/:id',          verifyToken, getTicket);
 router.patch('/:id/status', verifyToken, requireTeamLeader, updateStatus);
 router.patch('/:id/assign', verifyToken, requireTeamLeader, assignTicket);

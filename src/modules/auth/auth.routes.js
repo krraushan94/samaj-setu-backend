@@ -2,7 +2,7 @@ const { Router } = require('express');
 const { body } = require('express-validator');
 const {
   sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword, resetCitizenPassword,
-  changePassword, requestPasswordReset, confirmPasswordReset,
+  changePassword, requestPasswordReset, confirmPasswordReset, registerPushToken,
 } = require('./auth.controller');
 const { verifyToken } = require('../../middleware/auth');
 const { validate } = require('../../middleware/validate');
@@ -35,5 +35,10 @@ router.post('/citizen/reset-password', passwordResetLimiter, resetCitizenPasswor
 router.post('/change-password',        verifyToken, changePassword);
 router.post('/forgot-password',        universalPasswordResetLimiter, requestPasswordReset);
 router.post('/reset-password',         universalPasswordResetLimiter, confirmPasswordReset);
+
+// Any authenticated role except admin (citizen, leader, member) — registers this device's
+// Expo push token so notify.js can push alongside the existing in-app notification. Admin has
+// no push-relevant table column and doesn't receive notify()-based notifications today.
+router.post('/push-token', verifyToken, registerPushToken);
 
 module.exports = router;

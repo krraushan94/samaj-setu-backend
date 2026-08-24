@@ -42,6 +42,24 @@ router.get('/board', asyncHandler(async (req, res) => {
   res.json({ success: true, issues: result.rows });
 }));
 
+// Public transparency stats (no auth) — aggregate-only, no ticket-level detail, so it's safe
+// to show every citizen regardless of category. Computed in JS rather than with SQL date
+// functions since it also has to run against the pg-mem-backed test harness.
+router.get('/stats', asyncHandler(async (_req, res) => {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  const result = await query(
+    "SELECT created_at, updated_at FROM tickets WHERE status IN ('resolved','closed') AND updated_at >= $1",
+    [monthStart]
+  );
+  const rows = result.rows;
+  const resolvedThisMonth = rows.length;
+  const avgResolutionDays = rows.length
+    ? Math.round((rows.reduce((sum, r) => sum + (new Date(r.updated_at) - new Date(r.created_at)), 0) / rows.length / 86400000) * 10) / 10
+    : 0;
+  res.json({ success: true, resolvedThisMonth, avgResolutionDays });
+}));
+
 // Report a board post as false / defamatory / inappropriate (any signed-in citizen)
 router.post('/board/:ticketId/report', verifyToken, asyncHandler(async (req, res) => {
   const { reason } = req.body;

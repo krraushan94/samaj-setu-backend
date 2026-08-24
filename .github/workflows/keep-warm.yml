@@ -1,0 +1,22 @@
+name: Keep backend warm
+
+# Render's free tier sleeps the instance after ~15 minutes idle — the next citizen request
+# then eats a 30-60s cold-start delay, which reads as "the app is broken" rather than
+# "starting up". A ping every 10 minutes keeps it awake for anyone actually using the app.
+# GitHub Actions' free minutes cover this easily at this frequency — $0 either way.
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping /health
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" --max-time 60 https://samaj-setu-backend.onrender.com/health)
+          echo "Health check returned HTTP $status"
+          if [ "$status" != "200" ]; then
+            echo "::warning::Backend health check did not return 200 (got $status) — may just be a slow cold start."
+          fi

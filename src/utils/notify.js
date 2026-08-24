@@ -1,5 +1,6 @@
 const { randomUUID: uuidv4 } = require('crypto');
 const { query } = require('../config/db');
+const { sendPushNotification } = require('./expoPush');
 
 // Best-effort in-app notification — never throws, so a notification failure
 // (or a DB hiccup) can never block the ticket/SOS/visit action it's attached to.
@@ -13,6 +14,19 @@ async function notify(recipientId, recipientRole, title, body, type, entity = {}
     );
   } catch (err) {
     console.error('notify() failed (non-fatal):', err.message);
+  }
+
+  // Also push, if this recipient has a device registered — citizens live in `users`,
+  // team leaders/members live in `team_members`. Fire-and-forget: a push failure must never
+  // surface to the caller, the in-app notification above already succeeded independently.
+  try {
+    const result = recipientRole === 'citizen'
+      ? await query('SELECT push_token FROM users WHERE id=$1', [recipientId])
+      : await query('SELECT push_token FROM team_members WHERE id=$1', [recipientId]);
+    const token = result.rows[0]?.push_token;
+    if (token) await sendPushNotification(token, title, body, { entityType: entity.entityType, entityId: entity.entityId, type });
+  } catch (err) {
+    console.error('notify() push lookup failed (non-fatal):', err.message);
   }
 }
 

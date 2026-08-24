@@ -469,7 +469,21 @@ const refresh = asyncHandler(async (req, res) => {
   }
 });
 
+// Register (or clear, with token: null) this device's Expo push token — citizens live in
+// `users`, leaders/members live in `team_members`. Admin has no push-relevant table and is
+// silently ignored rather than erroring, since the client can call this unconditionally
+// after any successful login regardless of role.
+const registerPushToken = asyncHandler(async (req, res) => {
+  const { token } = req.body;
+  if (req.user.role === 'citizen') {
+    await query('UPDATE users SET push_token=$1 WHERE id=$2', [token || null, req.user.id]);
+  } else if (req.user.role === 'leader' || req.user.role === 'member') {
+    await query('UPDATE team_members SET push_token=$1 WHERE id=$2', [token || null, req.user.id]);
+  }
+  res.json({ success: true });
+});
+
 module.exports = {
   sendOtp, verifyOtp, register, login, refresh, forgotAdminPassword, resetAdminPassword, resetCitizenPassword,
-  changePassword, requestPasswordReset, confirmPasswordReset,
+  changePassword, requestPasswordReset, confirmPasswordReset, registerPushToken,
 };

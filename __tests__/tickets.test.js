@@ -245,6 +245,41 @@ describe('POST /api/tickets — BMS labour details', () => {
     expect(stored.routeTo).toBe('Rajarhat New Town');
   });
 
+  it('accepts a transport labour ticket with no vehicle details (optional) and persists them when given', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-bms' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const withoutVehicleRes = await request(app).post('/api/tickets').set('Authorization', `Bearer ${otherCitizenToken()}`)
+      .send({
+        ...labourPayload({ routeFrom: 'Stand A', routeTo: 'Stand B' }),
+        subCategory: 'Auto / Taxi / Cab Driver – Fare or Commission Dispute',
+      });
+    expect(withoutVehicleRes.status).toBe(201);
+    const noVehicleInsert = mockQuery.mock.calls.find((c) => c[0].includes('INSERT INTO tickets'));
+    const storedNoVehicle = JSON.parse(noVehicleInsert[1][15]);
+    expect(storedNoVehicle.vehicleNumber).toBeNull();
+    expect(storedNoVehicle.vehicleOwnerName).toBeNull();
+
+    mockQuery.mockReset();
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-bms' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const withVehicleRes = await request(app).post('/api/tickets').set('Authorization', `Bearer ${otherCitizenToken()}`)
+      .send({
+        ...labourPayload({ routeFrom: 'Stand A', routeTo: 'Stand B', vehicleNumber: 'wb 20 ab 1234', vehicleOwnerName: 'Ramesh Das' }),
+        subCategory: 'Auto / Taxi / Cab Driver – Fare or Commission Dispute',
+      });
+    expect(withVehicleRes.status).toBe(201);
+    const vehicleInsert = mockQuery.mock.calls.find((c) => c[0].includes('INSERT INTO tickets'));
+    const storedWithVehicle = JSON.parse(vehicleInsert[1][15]);
+    expect(storedWithVehicle.vehicleNumber).toBe('wb 20 ab 1234');
+    expect(storedWithVehicle.vehicleOwnerName).toBe('Ramesh Das');
+  });
+
   it('does not require labourDetails for non-labour categories', async () => {
     mockQuery
       .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })
@@ -254,6 +289,34 @@ describe('POST /api/tickets — BMS labour details', () => {
     const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${citizenToken()}`)
       .send({ category: 'infrastructure', subCategory: 'street_light', title: 'Light broken', locationText: 'Ward 5' });
     expect(res.status).toBe(201);
+  });
+});
+
+// ─── Nearby Duplicates ─────────────────────────────────────────────────────────
+describe('GET /api/tickets/nearby-duplicates', () => {
+  it('returns other same-category/ward tickets from the last 14 days', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ ward: '5' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'other-ticket', ticket_number: 'SJT-2026-AAAAA', title: 'Pothole', upvote_count: 2, status: 'open' }] });
+    const res = await request(app).get('/api/tickets/nearby-duplicates?category=infrastructure&subCategory=Pothole')
+      .set('Authorization', `Bearer ${citizenToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.duplicates).toHaveLength(1);
+    expect(res.body.duplicates[0].ticket_number).toBe('SJT-2026-AAAAA');
+  });
+
+  it('returns empty when category/subCategory are missing', async () => {
+    const res = await request(app).get('/api/tickets/nearby-duplicates').set('Authorization', `Bearer ${citizenToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.duplicates).toEqual([]);
+  });
+
+  it('returns empty when the citizen has no ward on file', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ ward: null }] });
+    const res = await request(app).get('/api/tickets/nearby-duplicates?category=infrastructure&subCategory=Pothole')
+      .set('Authorization', `Bearer ${citizenToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.duplicates).toEqual([]);
   });
 });
 
