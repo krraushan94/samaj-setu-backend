@@ -1,10 +1,17 @@
 const { mockQuery } = require('./helpers/dbMock');
 const request = require('supertest');
+const jwt = require('jsonwebtoken');
 
 jest.mock('../src/config/db', () => require('./helpers/dbMock').dbMockFactory());
 
 const app = require('../src/app');
 const { citizenToken, leaderToken, adminToken, mockTicket, mockUser } = require('./helpers/fixtures');
+
+// A second citizen identity, distinct from citizenToken()'s fixed user-uuid-1 — this file
+// already runs citizenToken() through 15+ ticket-creation calls, right at
+// ticketCreateLimiter's per-user budget, so any test needing a guaranteed-fresh quota
+// (rather than exercising the limiter itself) should use this instead.
+const otherCitizenToken = () => jwt.sign({ id: 'user-uuid-2', role: 'citizen', mobile: '9999900001' }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
 beforeEach(() => mockQuery.mockReset());
 
@@ -206,6 +213,36 @@ describe('POST /api/tickets — BMS labour details', () => {
     expect(stored.liveLocation).toBe('22.65432, 88.45123');
     expect(stored.sector).toBe('unorganized');
     expect(stored.extraHackerField).toBeUndefined();
+    expect(stored.routeFrom).toBeNull(); // not a transport sub-category — route isn't required or stored
+    expect(stored.routeTo).toBeNull();
+  });
+
+  it('rejects a transport (Auto/Taxi/Cab Driver) labour ticket with no route', async () => {
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${otherCitizenToken()}`)
+      .send({
+        ...labourPayload(), subCategory: 'Auto / Taxi / Cab Driver – Fare or Commission Dispute',
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/route/i);
+  });
+
+  it('creates a transport labour ticket and persists the route', async () => {
+    mockQuery
+      .mockResolvedValueOnce({ rows: [{ gender: 'male' }] })
+      .mockResolvedValueOnce({ rows: [{ id: 'dept-bms' }] })
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [] });
+    const res = await request(app).post('/api/tickets').set('Authorization', `Bearer ${otherCitizenToken()}`)
+      .send({
+        ...labourPayload({ routeFrom: 'Hatiara Bus Stand', routeTo: 'Rajarhat New Town' }),
+        subCategory: 'Bus / Transport Worker – Salary Delayed or Not Paid',
+      });
+    expect(res.status).toBe(201);
+
+    const insertCall = mockQuery.mock.calls.find((c) => c[0].includes('INSERT INTO tickets'));
+    const stored = JSON.parse(insertCall[1][15]);
+    expect(stored.routeFrom).toBe('Hatiara Bus Stand');
+    expect(stored.routeTo).toBe('Rajarhat New Town');
   });
 
   it('does not require labourDetails for non-labour categories', async () => {

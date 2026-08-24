@@ -50,9 +50,15 @@ const autoPriority = (category, subCategory, gender, requestedPriority) => {
   return requestedPriority || 'medium';
 };
 
+// Auto/Taxi/Cab drivers and Bus/Transport workers travel a route — unlike every other
+// labour category, the workplace itself isn't a fixed location, so route source/destination
+// is what actually helps BMS locate/investigate the incident.
+const isTransportLabourSubCategory = (subCategory) =>
+  !!subCategory && (subCategory.startsWith('Auto / Taxi / Cab Driver') || subCategory.startsWith('Bus / Transport Worker'));
+
 // BMS/labour tickets carry worker-identity context no other category needs — checked here
 // (not just client-side) since the client can't be trusted to enforce a required field.
-const validateLabourDetails = (labourDetails) => {
+const validateLabourDetails = (labourDetails, subCategory) => {
   const d = labourDetails || {};
   if (!d.fullName?.trim()) return 'Worker\'s full name is required';
   if (!d.organisationName?.trim()) return 'Organisation / employer name is required';
@@ -60,6 +66,9 @@ const validateLabourDetails = (labourDetails) => {
   if (!d.aadharNumber?.trim() && !d.voterIdNumber?.trim()) return 'Aadhaar number or Voter ID is required';
   if (d.aadharNumber?.trim() && !/^\d{12}$/.test(d.aadharNumber.trim())) return 'Aadhaar number must be exactly 12 digits';
   if (d.voterIdNumber?.trim() && !/^[A-Za-z]{3}[0-9]{7}$/.test(d.voterIdNumber.trim())) return 'Enter a valid Voter ID (EPIC) number';
+  if (isTransportLabourSubCategory(subCategory) && (!d.routeFrom?.trim() || !d.routeTo?.trim())) {
+    return 'Route source and destination are required';
+  }
   return null;
 };
 
@@ -73,13 +82,15 @@ const createTicket = asyncHandler(async (req, res) => {
 
   let labourDetailsJson = null;
   if (category === 'labour') {
-    const labourError = validateLabourDetails(labourDetails);
+    const labourError = validateLabourDetails(labourDetails, subCategory);
     if (labourError) return res.status(400).json({ success: false, message: labourError });
     // Only persist the known fields — never store arbitrary client-supplied keys as-is.
     labourDetailsJson = JSON.stringify({
       fullName: labourDetails.fullName.trim(),
       organisationName: labourDetails.organisationName.trim(),
       liveLocation: labourDetails.liveLocation.trim(),
+      routeFrom: isTransportLabourSubCategory(subCategory) ? labourDetails.routeFrom.trim() : null,
+      routeTo: isTransportLabourSubCategory(subCategory) ? labourDetails.routeTo.trim() : null,
       aadharNumber: labourDetails.aadharNumber?.trim() || null,
       voterIdNumber: labourDetails.voterIdNumber?.trim() || null,
       idCardNumber: labourDetails.idCardNumber?.trim() || null,
